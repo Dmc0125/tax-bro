@@ -10,7 +10,7 @@ const dbPassword = requireEnvVar('DATABASE_PASSWORD');
 const dbPort = requireEnvVar('DATABASE_PORT');
 const dbDatabase = requireEnvVar('DATABASE');
 
-const db = createDb(dbHost, dbUsername, dbPassword, dbPort, dbDatabase);
+const { db } = createDb(dbHost, dbUsername, dbPassword, dbPort, dbDatabase);
 const migrator = new Migrator({
 	db,
 	provider: new FileMigrationProvider({

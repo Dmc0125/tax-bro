@@ -5,7 +5,8 @@
   "scripts": {
     "migrate:latest": "bun src/db/migrator.ts -- latest",
     "migrate:down": "bun src/db/migrator.ts -- down",
-    "migrate:up": "bun src/db/migrator.ts"
+    "migrate:up": "bun src/db/migrator.ts",
+    "dev": "bun --watch src/index.ts"
   },
   "devDependencies": {
     "@types/bun": "latest"
@@ -16,6 +17,7 @@
   "dependencies": {
     "@solana/web3.js": "^1.91.4",
     "@types/pg": "^8.11.5",
+    "bs58": "^5.0.0",
     "kysely": "^0.27.3",
     "pg": "^8.11.5",
     "prettier": "^3.2.5",

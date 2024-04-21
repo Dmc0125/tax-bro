@@ -1,10 +1,24 @@
 import { Kysely, PostgresDialect } from 'kysely';
 import { Pool as PgPool } from 'pg';
-import type { DbSignature, DbWallet } from './migrations/00';
+import type {
+	DbSesssion,
+	DbSignature,
+	DbTransaction,
+	DbTransactionInnerIx,
+	DbTransactionIx,
+	DbUser,
+	DbWallet,
+} from './migrations/00';
 
 export type Database = {
+	user: DbUser;
+	session: DbSesssion;
+
 	wallet: DbWallet;
 	signature: DbSignature;
+	transaction: DbTransaction;
+	transaction_ix: DbTransactionIx;
+	transaction_inner_ix: DbTransactionInnerIx;
 };
 
 export function createDb(
@@ -13,18 +27,24 @@ export function createDb(
 	dbPassword: string = 'super_secret',
 	port: string = '6543',
 	database: string = 'postgres',
-): Kysely<Database> {
-	return new Kysely<Database>({
+) {
+	const pool = new PgPool({
+		user: dbUsername,
+		password: dbPassword,
+		host: dbHost,
+		port: Number(port),
+		database,
+	});
+	const db = new Kysely<Database>({
 		dialect: new PostgresDialect({
-			pool: new PgPool({
-				user: dbUsername,
-				password: dbPassword,
-				host: dbHost,
-				port: Number(port),
-				database,
-			}),
+			pool,
 		}),
 	});
+
+	return {
+		pool,
+		db,
+	};
 }
 
 export function requireEnvVar(name: string): string {
