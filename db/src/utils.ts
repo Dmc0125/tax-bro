@@ -1,5 +1,6 @@
 import { Kysely, PostgresDialect } from 'kysely';
-import { Pool as PgPool } from 'pg';
+import pg from 'pg';
+
 import type {
 	DbSesssion,
 	DbSignature,
@@ -28,7 +29,7 @@ export function createDb(
 	port: string = '6543',
 	database: string = 'postgres',
 ) {
-	const pool = new PgPool({
+	const pool = new pg.Pool({
 		user: dbUsername,
 		password: dbPassword,
 		host: dbHost,

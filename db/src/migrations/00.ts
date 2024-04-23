@@ -16,6 +16,7 @@ export type DbSesssion = {
 
 export type DbWallet = {
 	id: Generated<number>;
+	user_id: number;
 	address: string;
 	status: 'in_queue' | 'processing' | 'updating' | 'processed';
 };
@@ -79,6 +80,9 @@ export async function up(db: Kysely<Database>) {
 	await db.schema
 		.createTable('wallet')
 		.addColumn('id', 'serial', (c) => c.notNull().primaryKey())
+		.addColumn('user_id', 'integer', (c) =>
+			c.notNull().references('user.id').onDelete('cascade').onUpdate('cascade'),
+		)
 		.addColumn('address', 'varchar(44)', (c) => c.notNull().unique())
 		.addColumn('status', sql`wallet_status`, (c) => c.defaultTo('in_queue'))
 		.execute();

@@ -4,9 +4,13 @@ import { jsonArrayFrom } from 'kysely/helpers/postgres';
 import { Connection, Message, MessageV0, PublicKey } from '@solana/web3.js';
 import type { Insertable } from 'kysely';
 import bs58 from 'bs58';
-
-import { createDb, requireEnvVar } from './db/utils';
-import type { DbTransaction, DbTransactionInnerIx, DbTransactionIx } from './db/migrations/00';
+import {
+	createDb,
+	requireEnvVar,
+	type DbTransaction,
+	type DbTransactionInnerIx,
+	type DbTransactionIx,
+} from 'db';
 
 const dbHost = requireEnvVar('DATABASE_HOST');
 const dbUsername = requireEnvVar('DATABASE_USERNAME');
@@ -17,8 +21,6 @@ const rpcUrl = requireEnvVar('RPC_URL');
 
 const { db } = createDb(dbHost, dbUsername, dbPassword, dbPort, dbDatabase);
 const connection = new Connection(rpcUrl);
-
-const reqBodySchema = z.array(z.string().min(1)).min(1);
 
 async function watchSignatures() {
 	while (true) {
@@ -210,24 +212,3 @@ async function watchQueue() {
 
 watchQueue();
 watchSignatures();
-
-const server = Bun.serve({
-	port: 3000,
-	async fetch(req) {
-		if (req.method === 'POST') {
-			const b = await req.json();
-			const parseResponse = reqBodySchema.safeParse(b);
-
-			if (parseResponse.success) {
-				await db
-					.insertInto('wallet')
-					.values(parseResponse.data.map((a) => ({ address: a, status: 'in_queue' })))
-					.execute();
-			}
-		}
-
-		return new Response('Bun!');
-	},
-});
-
-console.log('Listening at http://localhost:3000');

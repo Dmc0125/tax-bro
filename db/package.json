@@ -1,0 +1,22 @@
+{
+  "name": "db",
+  "module": "src/index.ts",
+  "types": "src/index.d.ts",
+  "type": "module",
+  "scripts": {
+    "migrate:latest": "bun src/migrator.ts -- latest",
+    "migrate:down": "bun src/migrator.ts -- down",
+    "migrate:up": "bun src/migrator.ts"
+  },
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^5.0.0"
+  },
+  "dependencies": {
+    "@types/pg": "^8.11.5",
+    "kysely": "^0.27.3",
+    "pg": "^8.11.5"
+  }
+}
