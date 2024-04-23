@@ -1,5 +1,15 @@
-import type { Handle } from '@sveltejs/kit';
+import type { Handle, HandleFetch } from '@sveltejs/kit';
+
 import { db, lucia } from './routes/auth';
+import { API_URL } from '$env/static/private';
+
+export const handleFetch: HandleFetch = async ({ event, request, fetch }) => {
+	if (request.url.startsWith(API_URL)) {
+		request.headers.set('auth_session', event.cookies.get('auth_session') || '');
+	}
+
+	return fetch(request);
+};
 
 export const handle: Handle = async ({ event, resolve }) => {
 	if (event.url.pathname.startsWith('/dashboard') || event.url.pathname.startsWith('/logout')) {
@@ -12,13 +22,11 @@ export const handle: Handle = async ({ event, resolve }) => {
 				},
 			});
 		}
-
 		const session = await db
 			.selectFrom('session')
 			.where('id', '=', sessionId)
 			.selectAll()
 			.executeTakeFirst();
-
 		if (!session) {
 			return new Response(null, {
 				status: 302,
@@ -33,6 +41,7 @@ export const handle: Handle = async ({ event, resolve }) => {
 				path: '.',
 				...sessionCookie.attributes,
 			});
+
 			return new Response(null, {
 				status: 302,
 				headers: {
@@ -40,13 +49,11 @@ export const handle: Handle = async ({ event, resolve }) => {
 				},
 			});
 		}
-
 		const user = await db
 			.selectFrom('user')
 			.where('id', '=', session.user_id)
 			.selectAll()
 			.executeTakeFirst();
-
 		if (!user) {
 			return new Response(null, {
 				status: 302,
@@ -55,7 +62,6 @@ export const handle: Handle = async ({ event, resolve }) => {
 				},
 			});
 		}
-
 		event.locals.user = {
 			id: user.id,
 			githubId: user.github_id,
@@ -67,5 +73,6 @@ export const handle: Handle = async ({ event, resolve }) => {
 		};
 	}
 
-	return resolve(event);
+	const r = await resolve(event);
+	return r;
 };

@@ -1,6 +1,9 @@
 import { Lucia } from 'lucia';
-import { dev } from '$app/environment';
 import { NodePostgresAdapter } from '@lucia-auth/adapter-postgresql';
+import { GitHub } from 'arctic';
+import { createDb } from 'db';
+
+import { dev } from '$app/environment';
 import {
 	DATABASE,
 	DATABASE_HOST,
@@ -10,9 +13,6 @@ import {
 	GITHUB_CLIENT_ID,
 	GITHUB_CLIENT_SECRET,
 } from '$env/static/private';
-import { GitHub } from 'arctic';
-
-import { createDb } from '../../../server/src/db/utils';
 
 export const github = new GitHub(GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET);
 
