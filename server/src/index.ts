@@ -1,4 +1,3 @@
-import { z } from 'zod';
 import { setTimeout } from 'timers/promises';
 import { jsonArrayFrom } from 'kysely/helpers/postgres';
 import { Connection, Message, MessageV0, PublicKey } from '@solana/web3.js';
@@ -21,6 +20,23 @@ const rpcUrl = requireEnvVar('RPC_URL');
 
 const { db } = createDb(dbHost, dbUsername, dbPassword, dbPort, dbDatabase);
 const connection = new Connection(rpcUrl);
+
+async function parseTransactions() {
+	// while (true) {
+	// 	await db.with('user_wallets', (db) =>
+	// 		db
+	// 			.selectFrom('user')
+	// 			.select((eb) => [
+	// 				jsonArrayFrom(
+	// 					eb
+	// 						.selectFrom('wallet')
+	// 						.whereRef('wallet.user_id', '=', 'user.id')
+	// 						.select(['transactions_status', 'address']),
+	// 				).as('wallets'),
+	// 			]),
+	// 	);
+	// }
+}
 
 async function watchSignatures() {
 	while (true) {
@@ -49,9 +65,12 @@ async function watchSignatures() {
 				const signature = unfetched[i];
 				const tx = txs[i];
 
+				const ixs: Insertable<DbTransactionIx>[] = [];
+				const innerIxs: Insertable<DbTransactionInnerIx>[] = [];
+				let accounts: string[] = [];
+
 				if (tx) {
 					const timestamp = new Date(tx.blockTime! * 1000);
-					let accounts: string[] = [];
 
 					if (tx.version === 0) {
 						const m = tx.transaction.message as MessageV0;
@@ -65,7 +84,7 @@ async function watchSignatures() {
 
 						m.compiledInstructions.forEach((cix) => {
 							const d = Buffer.from(cix.data).toString('base64');
-							insertableIxs.push({
+							ixs.push({
 								signature_id: signature.id,
 								data: d,
 								program_id: accounts[cix.programIdIndex],
@@ -78,7 +97,7 @@ async function watchSignatures() {
 
 						m.instructions.forEach((ix) => {
 							const d = Buffer.from(bs58.decode(ix.data)).toString('base64');
-							insertableIxs.push({
+							ixs.push({
 								signature_id: signature.id,
 								data: d,
 								program_id: accounts[ix.programIdIndex],
@@ -92,7 +111,7 @@ async function watchSignatures() {
 							ii.instructions.forEach((iix) => {
 								const d = Buffer.from(bs58.decode(iix.data)).toString('base64');
 
-								insertableInnerIxs.push({
+								innerIxs.push({
 									signature_id: signature.id,
 									data: d,
 									index: ii.index,
@@ -112,6 +131,9 @@ async function watchSignatures() {
 						fee_payer: accounts[0],
 					});
 				}
+
+				insertableIxs.push(...ixs);
+				insertableInnerIxs.push(...innerIxs);
 			}
 
 			await db.transaction().execute(async (tx) => {
@@ -133,6 +155,7 @@ async function watchSignatures() {
 
 async function fetchSignatures(address: string, id: number) {
 	let beforeSig: string | undefined = undefined;
+	let firstSet = false;
 
 	while (true) {
 		const sigs = await connection.getSignaturesForAddress(new PublicKey(address), {
@@ -141,18 +164,36 @@ async function fetchSignatures(address: string, id: number) {
 		});
 
 		if (sigs.length) {
-			await db
-				.insertInto('signature')
-				.values(sigs.map((s) => ({ signature: s.signature })))
-				.onConflict((oc) => oc.column('signature').doNothing())
-				.execute();
+			if (!firstSet) {
+				await db
+					.updateTable('wallet')
+					.set((eb) => ({
+						last_signature: sigs[0].signature,
+						signatures_count: eb('signatures_count', '+', sigs.length),
+					}))
+					.where('id', '=', id)
+					.execute();
+				firstSet = true;
+			}
+			await db.transaction().execute(async (tx) => {
+				const insertedIds = await tx
+					.insertInto('signature')
+					.values(sigs.map((s) => ({ signature: s.signature })))
+					.onConflict((oc) => oc.column('signature').doNothing())
+					.returning('signature.id')
+					.execute();
+				await tx
+					.insertInto('signature_wallet_intermediary')
+					.values(insertedIds.map((sig) => ({ signature_id: sig.id, wallet_id: id })))
+					.execute();
+			});
 		}
 
 		if (sigs.length < 1000) {
 			await db
 				.updateTable('wallet')
 				.set({
-					status: 'processed',
+					signatures_status: 'processed',
 				})
 				.where('id', '=', id)
 				.execute();
@@ -170,7 +211,7 @@ async function fetchSignatures(address: string, id: number) {
 async function watchQueue() {
 	while (true) {
 		try {
-			const { processing, in_queue } = await db
+			const { initializing, in_queue } = await db
 				.selectFrom('wallet')
 				.select((qb) => [
 					jsonArrayFrom(
@@ -178,19 +219,19 @@ async function watchQueue() {
 							.selectFrom('wallet')
 							.select(['address', 'id'])
 							.orderBy('id')
-							.where('status', '=', 'processing'),
-					).as('processing'),
+							.where('signatures_status', '=', 'initializing'),
+					).as('initializing'),
 					jsonArrayFrom(
 						qb
 							.selectFrom('wallet')
 							.select(['address', 'id'])
 							.orderBy('id')
-							.where('status', '=', 'in_queue'),
+							.where('signatures_status', '=', 'in_queue'),
 					).as('in_queue'),
 				])
 				.executeTakeFirstOrThrow();
 
-			if (processing.length < 2) {
+			if (initializing.length < 2) {
 				const { address, id } = in_queue[0];
 
 				console.log(`Fetching signatures for: ${address}`);
@@ -199,7 +240,7 @@ async function watchQueue() {
 				await db
 					.updateTable('wallet')
 					.set({
-						status: 'processing',
+						signatures_status: 'initializing',
 					})
 					.where('id', '=', id)
 					.execute();

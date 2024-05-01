@@ -8,11 +8,12 @@ declare global {
 				id: number;
 				githubId: number;
 				username: string;
-			} | null;
+				avatarUrl: string;
+			};
 			session: {
 				id: string;
 				expiresAt: Date;
-			} | null;
+			};
 		}
 		// interface PageData {}
 		// interface PageState {}

@@ -66,6 +66,7 @@ export const handle: Handle = async ({ event, resolve }) => {
 			id: user.id,
 			githubId: user.github_id,
 			username: user.username,
+			avatarUrl: user.avatar_url,
 		};
 		event.locals.session = {
 			id: session.id,

@@ -74,6 +74,7 @@ export async function GET(event: RequestEvent) {
 				.values({
 					github_id: githubUser.id,
 					username: githubUser.login,
+					avatar_url: githubUser.avatar_url,
 				})
 				.returning('id')
 				.executeTakeFirst();
@@ -114,4 +115,5 @@ export async function GET(event: RequestEvent) {
 interface GitHubUser {
 	id: number;
 	login: string;
+	avatar_url: string;
 }

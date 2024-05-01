@@ -3,6 +3,7 @@ import pg from 'pg';
 
 import type {
 	DbSesssion,
+	DbSignaterWalletIntermediary,
 	DbSignature,
 	DbTransaction,
 	DbTransactionInnerIx,
@@ -17,6 +18,7 @@ export type Database = {
 
 	wallet: DbWallet;
 	signature: DbSignature;
+	signature_wallet_intermediary: DbSignaterWalletIntermediary;
 	transaction: DbTransaction;
 	transaction_ix: DbTransactionIx;
 	transaction_inner_ix: DbTransactionInnerIx;

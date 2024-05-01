@@ -4,8 +4,6 @@
 	let count = 0;
 </script>
 
-DASHBOARD
-
 <a href="/logout">logout</a>
 
 <form
@@ -17,7 +15,7 @@ DASHBOARD
 	}}
 >
 	<button
-		class="h-10 bg-gray-900 text-slate-50"
+		class="btn"
 		type="button"
 		on:click={() => {
 			count += 1;
@@ -26,9 +24,9 @@ DASHBOARD
 
 	<div class="flex flex-col gap-y-5">
 		{#each Array.from({ length: count + 1 }) as _}
-			<input type="text" name="address" id="addresss" placeholder="Address" class="h-10" />
+			<input type="text" name="address" id="addresss" placeholder="Address" class="input" />
 		{/each}
 	</div>
 
-	<button type="submit">Add</button>
+	<button type="submit" class="btn variant-filled">Add</button>
 </form>

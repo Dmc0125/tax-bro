@@ -3,7 +3,6 @@ import { PublicKey } from '@solana/web3.js';
 import { fail } from '@sveltejs/kit';
 
 import type { Actions } from './$types';
-import { API_URL } from '$env/static/private';
 import { db } from '../auth';
 
 const addressesSchema = z.array(
@@ -24,7 +23,7 @@ const addressesSchema = z.array(
 );
 
 export const actions: Actions = {
-	add: async ({ request, cookies, locals }) => {
+	add: async ({ request, locals }) => {
 		if (!locals.user || !locals.session) {
 			return fail(401);
 		}
@@ -39,9 +38,10 @@ export const actions: Actions = {
 				.values(
 					parseResult.data.map((a) => ({
 						address: a,
-						// @ts-expect-error
 						user_id: locals.user.id,
-						status: 'in_queue',
+						signatures_status: 'in_queue',
+						transactions_status: 'lagging',
+						signatures_count: 0,
 					})),
 				)
 				.execute();

@@ -6,6 +6,7 @@ export type DbUser = {
 	id: Generated<number>;
 	username: string;
 	github_id: number;
+	avatar_url: string;
 };
 
 export type DbSesssion = {
@@ -18,12 +19,20 @@ export type DbWallet = {
 	id: Generated<number>;
 	user_id: number;
 	address: string;
-	status: 'in_queue' | 'processing' | 'updating' | 'processed';
+	signatures_status: 'in_queue' | 'initializing' | 'updating' | 'processed';
+	transactions_status: 'updated' | 'lagging';
+	last_signature?: string;
+	signatures_count: number;
 };
 
 export type DbSignature = {
 	id: Generated<number>;
 	signature: string;
+};
+
+export type DbSignaterWalletIntermediary = {
+	wallet_id: number;
+	signature_id: number;
 };
 
 export type DbTransaction = {
@@ -55,6 +64,7 @@ export async function up(db: Kysely<Database>) {
 		.addColumn('id', 'serial', (c) => c.notNull().primaryKey())
 		.addColumn('username', 'varchar(44)', (c) => c.notNull())
 		.addColumn('github_id', 'integer', (c) => c.notNull())
+		.addColumn('avatar_url', 'varchar', (c) => c.notNull())
 		.execute();
 
 	await db.schema
@@ -67,8 +77,13 @@ export async function up(db: Kysely<Database>) {
 		.execute();
 
 	await db.schema
-		.createType('wallet_status')
-		.asEnum(['in_queue', 'processing', 'updating', 'processed'])
+		.createType('wallet_signatures_status')
+		.asEnum(['in_queue', 'initializing', 'updating', 'processed'])
+		.execute();
+
+	await db.schema
+		.createType('wallet_transactions_status')
+		.asEnum(['up_to_date', 'lagging'])
 		.execute();
 
 	await db.schema
@@ -84,7 +99,23 @@ export async function up(db: Kysely<Database>) {
 			c.notNull().references('user.id').onDelete('cascade').onUpdate('cascade'),
 		)
 		.addColumn('address', 'varchar(44)', (c) => c.notNull().unique())
-		.addColumn('status', sql`wallet_status`, (c) => c.defaultTo('in_queue'))
+		.addColumn('signatures_status', sql`wallet_signatures_status`, (c) => c.defaultTo('in_queue'))
+		.addColumn('transactions_status', sql`wallet_transactions_status`, (c) =>
+			c.defaultTo('lagging'),
+		)
+		.addColumn('last_signature', 'varchar(88)')
+		.addColumn('signatures_count', 'integer', (c) => c.defaultTo(0))
+		.execute();
+
+	await db.schema
+		.createTable('signature_wallet_intermediary')
+		.addColumn('signature_id', 'integer', (c) =>
+			c.references('signature.id').onDelete('cascade').onUpdate('cascade').notNull(),
+		)
+		.addColumn('wallet_id', 'integer', (c) =>
+			c.references('wallet.id').onDelete('cascade').onUpdate('cascade').notNull(),
+		)
+		.addPrimaryKeyConstraint('swi_pk', ['signature_id', 'wallet_id'])
 		.execute();
 
 	await db.schema.createType('tx_version').asEnum(['legacy', '0']).execute();
@@ -130,6 +161,7 @@ export async function down(db: Kysely<Database>) {
 	await db.schema.dropTable('transaction_ix').ifExists().execute();
 	await db.schema.dropTable('transaction_inner_ix').ifExists().execute();
 	await db.schema.dropTable('transaction').ifExists().execute();
+	await db.schema.dropTable('signature_wallet_intermediary').ifExists().execute();
 	await db.schema.dropTable('wallet').ifExists().execute();
 	await db.schema.dropTable('signature').ifExists().execute();
 	await db.schema.dropType('wallet_status').ifExists().execute();
