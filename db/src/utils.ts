@@ -11,6 +11,7 @@ import type {
 	DbUser,
 	DbWallet,
 } from './migrations/00';
+import type { DbEvent, DbTokenAccount } from './migrations/01';
 
 export type Database = {
 	user: DbUser;
@@ -22,6 +23,9 @@ export type Database = {
 	transaction: DbTransaction;
 	transaction_ix: DbTransactionIx;
 	transaction_inner_ix: DbTransactionInnerIx;
+
+	token_account: DbTokenAccount;
+	event: DbEvent;
 };
 
 export function createDb(

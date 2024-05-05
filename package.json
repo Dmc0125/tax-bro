@@ -5,5 +5,10 @@
     "client",
     "db",
     "server"
-  ]
+  ],
+  "dependencies": {
+    "@solana/spl-token": "^0.4.6",
+    "@solana/web3.js": "^1.91.7",
+    "bs58": "^5.0.0"
+  }
 }

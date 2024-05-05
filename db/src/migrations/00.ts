@@ -19,8 +19,9 @@ export type DbWallet = {
 	id: Generated<number>;
 	user_id: number;
 	address: string;
-	signatures_status: 'in_queue' | 'initializing' | 'updating' | 'processed';
-	transactions_status: 'updated' | 'lagging';
+	signatures_status: 'init' | 'init_processing' | 'processed';
+	transactions_status: 'init' | 'init_processing' | 'processed';
+	parsing_status: 'init' | 'init_processing' | 'processed';
 	last_signature?: string;
 	signatures_count: number;
 };
@@ -50,7 +51,7 @@ export type DbTransactionIx = {
 	signature_id: number;
 	accounts: string[];
 	program_id: string;
-	/** Base64 encoded */
+	/** hex encoded */
 	data: string;
 };
 
@@ -77,13 +78,8 @@ export async function up(db: Kysely<Database>) {
 		.execute();
 
 	await db.schema
-		.createType('wallet_signatures_status')
-		.asEnum(['in_queue', 'initializing', 'updating', 'processed'])
-		.execute();
-
-	await db.schema
-		.createType('wallet_transactions_status')
-		.asEnum(['up_to_date', 'lagging'])
+		.createType('processing_status')
+		.asEnum(['init', 'init_processing', 'processed'])
 		.execute();
 
 	await db.schema
@@ -99,10 +95,9 @@ export async function up(db: Kysely<Database>) {
 			c.notNull().references('user.id').onDelete('cascade').onUpdate('cascade'),
 		)
 		.addColumn('address', 'varchar(44)', (c) => c.notNull().unique())
-		.addColumn('signatures_status', sql`wallet_signatures_status`, (c) => c.defaultTo('in_queue'))
-		.addColumn('transactions_status', sql`wallet_transactions_status`, (c) =>
-			c.defaultTo('lagging'),
-		)
+		.addColumn('signatures_status', sql`processing_status`, (c) => c.defaultTo('init'))
+		.addColumn('transactions_status', sql`processing_status`, (c) => c.defaultTo('init'))
+		.addColumn('parsing_status', sql`processing_status`, (c) => c.defaultTo('init'))
 		.addColumn('last_signature', 'varchar(88)')
 		.addColumn('signatures_count', 'integer', (c) => c.defaultTo(0))
 		.execute();
@@ -161,11 +156,14 @@ export async function down(db: Kysely<Database>) {
 	await db.schema.dropTable('transaction_ix').ifExists().execute();
 	await db.schema.dropTable('transaction_inner_ix').ifExists().execute();
 	await db.schema.dropTable('transaction').ifExists().execute();
+
 	await db.schema.dropTable('signature_wallet_intermediary').ifExists().execute();
 	await db.schema.dropTable('wallet').ifExists().execute();
 	await db.schema.dropTable('signature').ifExists().execute();
-	await db.schema.dropType('wallet_status').ifExists().execute();
-	await db.schema.dropType('tx_version').ifExists().execute();
+
 	await db.schema.dropTable('session').ifExists().execute();
 	await db.schema.dropTable('user').ifExists().execute();
+
+	await db.schema.dropType('processing_status').ifExists().execute();
+	await db.schema.dropType('tx_version').ifExists().execute();
 }

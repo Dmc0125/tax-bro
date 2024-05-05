@@ -1,15 +1,6 @@
-import type { Handle, HandleFetch } from '@sveltejs/kit';
+import type { Handle } from '@sveltejs/kit';
 
 import { db, lucia } from './routes/auth';
-import { API_URL } from '$env/static/private';
-
-export const handleFetch: HandleFetch = async ({ event, request, fetch }) => {
-	if (request.url.startsWith(API_URL)) {
-		request.headers.set('auth_session', event.cookies.get('auth_session') || '');
-	}
-
-	return fetch(request);
-};
 
 export const handle: Handle = async ({ event, resolve }) => {
 	if (event.url.pathname.startsWith('/dashboard') || event.url.pathname.startsWith('/logout')) {

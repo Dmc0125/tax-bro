@@ -2,25 +2,33 @@ import { z } from 'zod';
 import { PublicKey } from '@solana/web3.js';
 import { fail } from '@sveltejs/kit';
 
-import type { Actions } from './$types';
+import type { Actions, PageServerLoad } from './$types';
 import { db } from '../auth';
+import type { DbWallet } from 'db';
 
-const addressesSchema = z.array(
-	z
-		.string()
-		.min(1)
-		.refine(
-			(s) => {
-				try {
-					new PublicKey(s);
-					return true;
-				} catch (error) {
-					return false;
-				}
-			},
-			{ message: 'Not a valid public key' },
-		),
-);
+export const load: PageServerLoad = async ({ locals }) => {
+	const userId = locals.user.id!;
+	const wallets = await db.selectFrom('wallet').where('user_id', '=', userId).selectAll().execute();
+	console.log('Rerunning load');
+	return {
+		wallets,
+	};
+};
+
+const addressSchema = z
+	.string()
+	.min(1)
+	.refine(
+		(s) => {
+			try {
+				new PublicKey(s);
+				return true;
+			} catch (error) {
+				return false;
+			}
+		},
+		{ message: 'Not a valid public key' },
+	);
 
 export const actions: Actions = {
 	add: async ({ request, locals }) => {
@@ -29,22 +37,35 @@ export const actions: Actions = {
 		}
 
 		const data = await request.formData();
-		const addresses = data.getAll('address');
-		const parseResult = addressesSchema.safeParse(addresses);
+		const address = data.get('address');
+		const parseResult = addressSchema.safeParse(address);
 
 		if (parseResult.success) {
-			await db
-				.insertInto('wallet')
-				.values(
-					parseResult.data.map((a) => ({
-						address: a,
+			try {
+				new PublicKey(parseResult.data);
+			} catch (error) {
+				return fail(400);
+			}
+
+			let insertedWallet: Omit<DbWallet, 'id'> & { id: number };
+			try {
+				insertedWallet = await db
+					.insertInto('wallet')
+					.values({
+						address: parseResult.data,
 						user_id: locals.user.id,
-						signatures_status: 'in_queue',
-						transactions_status: 'lagging',
 						signatures_count: 0,
-					})),
-				)
-				.execute();
+						signatures_status: 'init',
+						transactions_status: 'init',
+						parsing_status: 'init',
+					})
+					.returningAll()
+					.executeTakeFirstOrThrow();
+			} catch (error) {
+				return fail(500);
+			}
+
+			return { success: true, inserted: insertedWallet };
 		} else {
 			console.log(parseResult.error);
 			return fail(400);

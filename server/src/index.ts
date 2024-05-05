@@ -1,255 +1,42 @@
-import { setTimeout } from 'timers/promises';
-import { jsonArrayFrom } from 'kysely/helpers/postgres';
-import { Connection, Message, MessageV0, PublicKey } from '@solana/web3.js';
-import type { Insertable } from 'kysely';
+import { ASSOCIATED_TOKEN_PROGRAM_ID, TOKEN_PROGRAM_ID } from '@solana/spl-token';
+import { PublicKey } from '@solana/web3.js';
 import bs58 from 'bs58';
-import {
-	createDb,
-	requireEnvVar,
-	type DbTransaction,
-	type DbTransactionInnerIx,
-	type DbTransactionIx,
-} from 'db';
 
-const dbHost = requireEnvVar('DATABASE_HOST');
-const dbUsername = requireEnvVar('DATABASE_USERNAME');
-const dbPassword = requireEnvVar('DATABASE_PASSWORD');
-const dbPort = requireEnvVar('DATABASE_PORT');
-const dbDatabase = requireEnvVar('DATABASE');
-const rpcUrl = requireEnvVar('RPC_URL');
+import { connection, env } from './config';
+import { watchSignatures, watchTransactions, watchWallets } from './watchers';
 
-const { db } = createDb(dbHost, dbUsername, dbPassword, dbPort, dbDatabase);
-const connection = new Connection(rpcUrl);
-
-async function parseTransactions() {
-	// while (true) {
-	// 	await db.with('user_wallets', (db) =>
-	// 		db
-	// 			.selectFrom('user')
-	// 			.select((eb) => [
-	// 				jsonArrayFrom(
-	// 					eb
-	// 						.selectFrom('wallet')
-	// 						.whereRef('wallet.user_id', '=', 'user.id')
-	// 						.select(['transactions_status', 'address']),
-	// 				).as('wallets'),
-	// 			]),
-	// 	);
-	// }
-}
-
-async function watchSignatures() {
-	while (true) {
-		const unfetched = await db
-			.selectFrom('signature')
-			.orderBy('id asc')
-			.select(['signature', 'signature.id'])
-			.leftJoin('transaction', 'transaction.signature_id', 'signature.id')
-			.where('transaction.id', 'is', null)
-			.limit(10)
-			.execute();
-
-		console.log(`Fetching transactions: ${unfetched.length}`);
-
-		if (unfetched.length) {
-			const txs = await connection.getTransactions(
-				unfetched.map((u) => u.signature),
-				{ maxSupportedTransactionVersion: 0 },
-			);
-
-			const insertableMetas: Insertable<DbTransaction>[] = [];
-			const insertableIxs: Insertable<DbTransactionIx>[] = [];
-			const insertableInnerIxs: Insertable<DbTransactionInnerIx>[] = [];
-
-			for (let i = 0; i < unfetched.length; i++) {
-				const signature = unfetched[i];
-				const tx = txs[i];
-
-				const ixs: Insertable<DbTransactionIx>[] = [];
-				const innerIxs: Insertable<DbTransactionInnerIx>[] = [];
-				let accounts: string[] = [];
-
-				if (tx) {
-					const timestamp = new Date(tx.blockTime! * 1000);
-
-					if (tx.version === 0) {
-						const m = tx.transaction.message as MessageV0;
-						accounts = m.staticAccountKeys.map((a) => a.toString());
-						tx.meta?.loadedAddresses?.writable.forEach((a) => {
-							accounts.push(a.toString());
-						});
-						tx.meta?.loadedAddresses?.readonly.forEach((a) => {
-							accounts.push(a.toString());
-						});
-
-						m.compiledInstructions.forEach((cix) => {
-							const d = Buffer.from(cix.data).toString('base64');
-							ixs.push({
-								signature_id: signature.id,
-								data: d,
-								program_id: accounts[cix.programIdIndex],
-								accounts: cix.accountKeyIndexes.map((a) => accounts[a]),
-							});
-						});
-					} else {
-						const m = tx.transaction.message as Message;
-						accounts = m.accountKeys.map((a) => a.toString());
-
-						m.instructions.forEach((ix) => {
-							const d = Buffer.from(bs58.decode(ix.data)).toString('base64');
-							ixs.push({
-								signature_id: signature.id,
-								data: d,
-								program_id: accounts[ix.programIdIndex],
-								accounts: ix.accounts.map((a) => accounts[a]),
-							});
-						});
-					}
-
-					if (tx.meta?.innerInstructions) {
-						tx.meta.innerInstructions.forEach((ii) => {
-							ii.instructions.forEach((iix) => {
-								const d = Buffer.from(bs58.decode(iix.data)).toString('base64');
-
-								innerIxs.push({
-									signature_id: signature.id,
-									data: d,
-									index: ii.index,
-									program_id: accounts[iix.programIdIndex],
-									accounts: iix.accounts.map((a) => accounts[a]),
-								});
-							});
-						});
-					}
-
-					insertableMetas.push({
-						signature_id: signature.id,
-						timestamp,
-						accounts,
-						version: tx.version === 0 ? '0' : 'legacy',
-						fee: tx.meta?.fee || 0,
-						fee_payer: accounts[0],
-					});
-				}
-
-				insertableIxs.push(...ixs);
-				insertableInnerIxs.push(...innerIxs);
-			}
-
-			await db.transaction().execute(async (tx) => {
-				if (insertableMetas.length) {
-					await tx.insertInto('transaction').values(insertableMetas).execute();
-				}
-				if (insertableIxs.length) {
-					await tx.insertInto('transaction_ix').values(insertableIxs).execute();
-				}
-				if (insertableInnerIxs.length) {
-					await tx.insertInto('transaction_inner_ix').values(insertableInnerIxs).execute();
-				}
-			});
-		}
-
-		await setTimeout(3000);
-	}
-}
-
-async function fetchSignatures(address: string, id: number) {
-	let beforeSig: string | undefined = undefined;
-	let firstSet = false;
-
-	while (true) {
-		const sigs = await connection.getSignaturesForAddress(new PublicKey(address), {
-			limit: 1000,
-			before: beforeSig,
-		});
-
-		if (sigs.length) {
-			if (!firstSet) {
-				await db
-					.updateTable('wallet')
-					.set((eb) => ({
-						last_signature: sigs[0].signature,
-						signatures_count: eb('signatures_count', '+', sigs.length),
-					}))
-					.where('id', '=', id)
-					.execute();
-				firstSet = true;
-			}
-			await db.transaction().execute(async (tx) => {
-				const insertedIds = await tx
-					.insertInto('signature')
-					.values(sigs.map((s) => ({ signature: s.signature })))
-					.onConflict((oc) => oc.column('signature').doNothing())
-					.returning('signature.id')
-					.execute();
-				await tx
-					.insertInto('signature_wallet_intermediary')
-					.values(insertedIds.map((sig) => ({ signature_id: sig.id, wallet_id: id })))
-					.execute();
-			});
-		}
-
-		if (sigs.length < 1000) {
-			await db
-				.updateTable('wallet')
-				.set({
-					signatures_status: 'processed',
-				})
-				.where('id', '=', id)
-				.execute();
-
-			console.log(`Finished fetching signatures for: ${address}`);
-			break;
-		} else {
-			beforeSig = sigs.at(-1)?.signature;
-		}
-
-		await setTimeout(5000);
-	}
-}
-
-async function watchQueue() {
-	while (true) {
-		try {
-			const { initializing, in_queue } = await db
-				.selectFrom('wallet')
-				.select((qb) => [
-					jsonArrayFrom(
-						qb
-							.selectFrom('wallet')
-							.select(['address', 'id'])
-							.orderBy('id')
-							.where('signatures_status', '=', 'initializing'),
-					).as('initializing'),
-					jsonArrayFrom(
-						qb
-							.selectFrom('wallet')
-							.select(['address', 'id'])
-							.orderBy('id')
-							.where('signatures_status', '=', 'in_queue'),
-					).as('in_queue'),
-				])
-				.executeTakeFirstOrThrow();
-
-			if (initializing.length < 2) {
-				const { address, id } = in_queue[0];
-
-				console.log(`Fetching signatures for: ${address}`);
-				fetchSignatures(address, id);
-
-				await db
-					.updateTable('wallet')
-					.set({
-						signatures_status: 'initializing',
-					})
-					.where('id', '=', id)
-					.execute();
-			}
-		} catch (error) {}
-
-		await setTimeout(10000);
-	}
-}
-
-watchQueue();
+watchWallets();
 watchSignatures();
+watchTransactions();
+
+// Bun.serve({
+// 	port: env.PORT,
+// 	async fetch(req) {
+// 		if (req.method !== 'POST' || req.headers.get('content-type') !== 'application/json') {
+// 			return new Response(null, { status: 400 });
+// 		}
+
+// 		const apiSecret = req.headers.get('x-api-secret');
+
+// 		if (!apiSecret || apiSecret !== env.API_SECRET) {
+// 			return new Response(null, {
+// 				status: 401,
+// 			});
+// 		}
+
+// 		const body = await req.json();
+// 		const [urlPath, _] = req.url.split('?');
+
+// 		try {
+// 			// if (urlPath.endsWith('fetch_signatures')) {
+// 			// 	addToFetchSignaturesQueue(body);
+// 			// }
+// 		} catch (error) {
+// 			return error as Response;
+// 		}
+
+// 		return new Response(null, { status: 200 });
+// 	},
+// });
+
+console.log(`Server running on http://localhost:${env.PORT}`);
