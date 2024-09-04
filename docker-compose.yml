@@ -1,0 +1,48 @@
+services:
+  test_db:
+    image: postgres:latest
+    restart: always
+    environment:
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: pwd
+      POSTGRES_DB: db
+    volumes:
+      - ./.db_data/test_data:/var/lib/postgresql/data
+    ports:
+      - "5433:5432"
+    profiles:
+      - test
+
+  db:
+    image: postgres:latest
+    restart: always
+    environment:
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: pwd
+      POSTGRES_DB: db
+    volumes:
+      - ./.db_data/data:/var/lib/postgresql/data
+    ports:
+      - "5434:5432"
+    profiles:
+      - local
+
+  adminer:
+    image: adminer
+    restart: always
+    depends_on:
+      - db
+    ports:
+      - "8081:8080"
+    profiles:
+      - local
+
+  test_adminer:
+    image: adminer
+    restart: always
+    depends_on:
+      - test_db
+    ports:
+      - "8081:8080"
+    profiles:
+      - test
