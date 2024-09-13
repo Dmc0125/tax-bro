@@ -1,5 +1,7 @@
 CREATE TYPE auth_provider_type AS ENUM ('github');
 
+INSERT INTO with_timestamps (table_name) VALUES ('user'), ('github_auth_data');
+
 CREATE TABLE "user" (
     id SERIAL PRIMARY KEY NOT NULL,
     auth_provider auth_provider_type NOT NULL

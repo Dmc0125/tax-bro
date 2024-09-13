@@ -1,3 +1,9 @@
+INSERT INTO with_timestamps (table_name) VALUES 
+    ('wallet'),
+    ('wallet_to_signature'),
+    ('associated_account'),
+    ('sync_wallet_request');
+
 CREATE TABLE wallet (
     id SERIAL PRIMARY KEY NOT NULL,
     user_id INTEGER NOT NULL,
@@ -10,7 +16,8 @@ CREATE TABLE wallet (
     UNIQUE (user_id, address_id),
 
     label VARCHAR(50) NOT NULL,
-    signatures_count INTEGER NOT NULL DEFAULT 0
+    signatures INTEGER NOT NULL DEFAULT 0,
+    associated_accounts INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE wallet_to_signature (
@@ -33,4 +40,14 @@ CREATE TABLE associated_account (
     FOREIGN KEY (last_signature_id) REFERENCES "signature"(id),
     FOREIGN KEY (address_id) REFERENCES "address"(id),
     UNIQUE (wallet_id, address_id)
+);
+
+CREATE TYPE sync_wallet_request_status AS ENUM ('queued', 'processing', 'done');
+
+CREATE TABLE sync_wallet_request (
+    id SERIAL PRIMARY KEY NOT NULL,
+    wallet_id INTEGER UNIQUE NOT NULL,
+    "status" sync_wallet_request_status NOT NULL DEFAULT 'queued',
+
+    FOREIGN KEY (wallet_id) REFERENCES wallet(id)
 );

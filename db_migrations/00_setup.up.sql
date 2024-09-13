@@ -46,4 +46,9 @@ BEGIN
 END;
 $$;
 
+CREATE EVENT IF NOT EXISTS TRIGGER add_timestamps_trigger
+ON ddl_command_end
+WHEN TAG IN ('CREATE TABLE')
+EXECUTE FUNCTION add_timestamps_cols();
+
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";

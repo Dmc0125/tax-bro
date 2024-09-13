@@ -1,3 +1,10 @@
+INSERT INTO with_timestamps (table_name) VALUES
+    ('transaction'),
+    ('instruction'),
+    ('inner_instruction'),
+    ('transaction_logs'),
+    ('instruction_event');
+
 CREATE TABLE "address" (
     id SERIAL PRIMARY KEY NOT NULL,
     value VARCHAR(100) UNIQUE NOT NULL
@@ -47,7 +54,7 @@ CREATE INDEX instruction_program_account_id ON instruction(program_account_id);
 CREATE TABLE inner_instruction (
     signature_id INTEGER NOT NULL,
     -- index of instruction it belongs to
-    ix_index INTEGER NOT NULL,
+    ix_index SMALLINT NOT NULL,
     -- position of inner ix
     "index" SMALLINT NOT NULL,
 
@@ -60,7 +67,6 @@ CREATE TABLE inner_instruction (
 
     FOREIGN KEY (program_account_id) REFERENCES "address"(id)
 );
-
 
 CREATE TABLE transaction_logs (
     signature_id INTEGER NOT NULL,

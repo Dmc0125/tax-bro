@@ -1,3 +1,11 @@
+DELETE FROM with_timestamps WHERE table_name = ANY(ARRAY[
+    'transaction',
+    'instruction',
+    'inner_instruction',
+    'transaction_logs',
+    'instruction_event'
+]);
+
 DROP TABLE IF EXISTS instruction_event;
 
 DROP TYPE IF EXISTS event_type;
