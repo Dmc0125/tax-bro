@@ -29,6 +29,7 @@ CREATE TABLE "transaction" (
     slot BIGINT NOT NULL,
     block_index INTEGER,
 
+    logs VARCHAR[] NOT NULL DEFAULT ARRAY[]::VARCHAR[],
     err BOOLEAN NOT NULL,
     fee BIGINT NOT NULL,
 
@@ -66,13 +67,6 @@ CREATE TABLE inner_instruction (
     "data" BYTEA NOT NULL,
 
     FOREIGN KEY (program_account_id) REFERENCES "address"(id)
-);
-
-CREATE TABLE transaction_logs (
-    signature_id INTEGER NOT NULL,
-    logs VARCHAR[] NOT NULL,
-
-    FOREIGN KEY (signature_id) REFERENCES "signature"(id)
 );
 
 CREATE TYPE event_type AS ENUM ('transfer');

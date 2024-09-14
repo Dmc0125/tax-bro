@@ -3,6 +3,7 @@ package utils
 import (
 	"fmt"
 	"log"
+	"os"
 	"runtime"
 	"strings"
 )
@@ -32,6 +33,12 @@ func getStackTrace() string {
 func Assert(cond bool, msg string) {
 	if !cond {
 		stackTrace := getStackTrace()
-		log.Fatalf("Assertion failed: %s\nStack trace: %s\n", msg, stackTrace)
+		e := os.Getenv("RUNTIME_ENV")
+
+		if e == "integration_tests" {
+			log.Panicf("Assertion failed: %s\nStack trace: %s\n", msg, stackTrace)
+		} else {
+			log.Fatalf("Assertion failed: %s\nStack trace: %s\n", msg, stackTrace)
+		}
 	}
 }

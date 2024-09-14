@@ -36,13 +36,3 @@ services:
       - "8081:8080"
     profiles:
       - local
-
-  test_adminer:
-    image: adminer
-    restart: always
-    depends_on:
-      - test_db
-    ports:
-      - "8081:8080"
-    profiles:
-      - test

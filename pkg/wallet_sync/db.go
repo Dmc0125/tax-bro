@@ -2,6 +2,7 @@ package walletsync
 
 import (
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -89,16 +90,16 @@ func (s signatures) getId(signature string) (int32, error) {
 	return 0, errors.New("unable to find signature id")
 }
 
-type account struct {
+type Account struct {
 	Id      int32
 	Address string
 }
 
-type accounts []account
+type accounts []Account
 
 func (a *accounts) save(tx *sqlx.Tx, insertableAddresses pq.StringArray) {
 	if len(insertableAddresses) > 0 {
-		savedAddresses := []account{}
+		savedAddresses := []Account{}
 		err := tx.Select(
 			&savedAddresses,
 			`SELECT id, value as address FROM address WHERE value = ANY($1)`,
@@ -109,7 +110,7 @@ func (a *accounts) save(tx *sqlx.Tx, insertableAddresses pq.StringArray) {
 
 		unsavedAddresses := make(pq.StringArray, 0)
 		for _, a := range insertableAddresses {
-			idx := slices.IndexFunc(savedAddresses, func(sa account) bool {
+			idx := slices.IndexFunc(savedAddresses, func(sa Account) bool {
 				return sa.Address == a
 			})
 			if idx == -1 {
@@ -118,7 +119,7 @@ func (a *accounts) save(tx *sqlx.Tx, insertableAddresses pq.StringArray) {
 		}
 
 		if len(unsavedAddresses) > 0 {
-			insertedAddresses := []account{}
+			insertedAddresses := []Account{}
 			err := tx.Select(
 				&insertedAddresses,
 				`INSERT INTO address (value) (
@@ -142,8 +143,8 @@ func (a accounts) getId(address string) (int32, error) {
 }
 
 type instructionBase struct {
-	ProgramAddress string `db:"program_address"`
-	Accounts       []account
+	ProgramAddress string `json:"program_address"`
+	Accounts       []Account
 	Data           string
 }
 
@@ -163,7 +164,7 @@ func (ix *instructionBase) GetData() []byte {
 
 type instruction struct {
 	instructionBase
-	InnerIxs []instructionBase `db:"inner_ixs"`
+	InnerIxs []instructionBase `json:"inner_ixs"`
 }
 
 func (ix *instruction) parse() ([]instructionsparser.Event, []instructionsparser.AssociatedAccount) {
@@ -181,9 +182,9 @@ type transaction struct {
 	Logs        []string
 }
 
-type transactions []transaction
+type Transactions []transaction
 
-func (txs transactions) contains(signature string) bool {
+func (txs Transactions) contains(signature string) bool {
 	for i := 0; i < len(txs); i++ {
 		if txs[i].Signature == signature {
 			return true
@@ -209,7 +210,18 @@ func selectAccountsCoalesce(tableName string) string {
 	)
 }
 
-func (txs *transactions) get(db *sqlx.DB, signatures []string) {
+type transactionQueryResult struct {
+	transaction
+	Ixs  json.RawMessage
+	Logs pq.StringArray
+}
+
+func (qr *transactionQueryResult) unmarshalIxs() (ixs []instruction, err error) {
+	err = json.Unmarshal(qr.Ixs, &ixs)
+	return
+}
+
+func (txs *Transactions) Get(db *sqlx.DB, signatures []string) {
 	q := fmt.Sprintf(
 		`SELECT
 			signature.value AS signature,
@@ -223,7 +235,7 @@ func (txs *transactions) get(db *sqlx.DB, signatures []string) {
 						(
 							SELECT coalesce(json_agg(agg), '[]') FROM (
 								SELECT
-									address.value AS program_address
+									address.value AS program_address,
 									%s AS accounts,
 									inner_instruction.data
 								FROM
@@ -245,13 +257,11 @@ func (txs *transactions) get(db *sqlx.DB, signatures []string) {
 						instruction.signature_id = signature.id
 					ORDER BY
 						instruction.index ASC
-				)
+				) AS agg
 			) AS ixs,
-			 transaction_logs.logs
+			transaction.logs
 		FROM
 			signature
-		LEFT JOIN
-			transaction_logs ON transaction_logs.signature_id = signature.id
 		INNER JOIN
 			transaction ON transaction.signature_id = signature.id
 		WHERE
@@ -260,6 +270,19 @@ func (txs *transactions) get(db *sqlx.DB, signatures []string) {
 		selectAccountsCoalesce("instruction"),
 		selectAccountsCoalesce("inner_instruction"),
 	)
-	err := db.Select(txs, q, pq.StringArray(signatures))
+	result := []transactionQueryResult{}
+	err := db.Select(&result, q, pq.StringArray(signatures))
 	utils.Assert(err == nil, fmt.Sprintf("unable to get transactions: %s", err))
+
+	for i := 0; i < len(result); i++ {
+		qr := &result[i]
+		ixs, err := qr.unmarshalIxs()
+		utils.Assert(err == nil, fmt.Sprintf("unable to unmarshal ixs: %s", err))
+		*txs = append((*txs), transaction{
+			Signature:   qr.Signature,
+			SignatureId: qr.SignatureId,
+			Logs:        qr.Logs,
+			Ixs:         ixs,
+		})
+	}
 }

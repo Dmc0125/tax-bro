@@ -63,11 +63,11 @@ func (q *msgQueue) walk(f func(interface{}) bool, exitEarly func() bool) {
 			return
 		}
 
-		item := &q.items[i]
+		item := q.items[i]
 		shouldDelete := f(item)
 
 		if shouldDelete {
-			q.items = append(q.items[:i], q.items[i+1:])
+			q.items = append(q.items[:i], q.items[i+1:]...)
 		} else {
 			i += 1
 		}
@@ -109,8 +109,8 @@ func fetchAndParse(rpcClient *rpc.Client, db *sqlx.DB, req syncWalletRequest, qu
 			signatures[i] = signaturesRes[i].Signature.String()
 		}
 
-		savedTransactions := transactions{}
-		savedTransactions.get(db, signatures)
+		savedTransactions := Transactions{}
+		savedTransactions.Get(db, signatures)
 
 		if len(savedTransactions) > 0 {
 			messages := make([]interface{}, 0)
@@ -200,7 +200,6 @@ func (u *update) saveTransactions(db *sqlx.DB) {
 	insertableTxs := []map[string]interface{}{}
 	insertableIxs := []map[string]interface{}{}
 	insertableInnerIxs := []map[string]interface{}{}
-	insertableLogs := []map[string]interface{}{}
 
 	for i := 0; i < len(u.transactions); i++ {
 		tx := &u.transactions[i]
@@ -222,14 +221,8 @@ func (u *update) saveTransactions(db *sqlx.DB) {
 			"slot":                   tx.Slot,
 			"err":                    tx.Err,
 			"fee":                    tx.Fee,
+			"logs":                   pq.StringArray(tx.Logs),
 		})
-
-		if len(tx.Logs) > 0 {
-			insertableLogs = append(insertableLogs, map[string]interface{}{
-				"signature_id": signatureId,
-				"logs":         pq.StringArray(tx.Logs),
-			})
-		}
 
 		for ixIndex := 0; ixIndex < len(tx.Ixs); ixIndex++ {
 			ix := &tx.Ixs[ixIndex]
@@ -266,8 +259,8 @@ func (u *update) saveTransactions(db *sqlx.DB) {
 	if len(insertableTxs) > 0 {
 		_, err = tx.Exec(
 			`INSERT INTO
-				transaction (signature_id, accounts_ids, timestamp, timestamp_granularized, slot, err, fee)
-			VALUES (:signature_id, :accounts_ids, :timestamp, :timestamp_granularized, :slot, :err, :fee)`,
+				transaction (signature_id, accounts_ids, timestamp, timestamp_granularized, logs, slot, err, fee)
+			VALUES (:signature_id, :accounts_ids, :timestamp, :timestamp_granularized, :logs, :slot, :err, :fee)`,
 			insertableTxs,
 		)
 		utils.Assert(err == nil, fmt.Sprintf("unable to insert txs: %s", err))
@@ -291,14 +284,6 @@ func (u *update) saveTransactions(db *sqlx.DB) {
 			insertableInnerIxs,
 		)
 		utils.Assert(err == nil, fmt.Sprintf("unable to insert inner ixs: %s", err))
-	}
-
-	if len(insertableLogs) > 0 {
-		_, err := tx.Exec(
-			`INSERT INTO transaction_logs VALUES (:signature_id, :logs)`,
-			insertableLogs,
-		)
-		utils.Assert(err == nil, fmt.Sprintf("unable to insert logs: %s", err))
 	}
 
 	err = tx.Commit()
@@ -344,7 +329,7 @@ func (u *update) updateUser(db *sqlx.DB) {
 		for i := 0; i < len(u.associatedAccounts); i++ {
 			addresses[i] = u.associatedAccounts[i].Address
 		}
-		accounts := []account{}
+		accounts := []Account{}
 		tx.Select(
 			&accounts,
 			`SELECT

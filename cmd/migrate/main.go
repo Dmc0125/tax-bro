@@ -77,6 +77,10 @@ func prepareMigrations(
 		}
 	}
 
+	if len(executableMigrations) == 0 {
+		return "", []string{}
+	}
+
 	if opts.steps != 0 {
 		s := math.Min(float64(len(executableMigrations)), math.Abs(float64(opts.steps)))
 		executableMigrations = executableMigrations[:int(s)]
