@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"slices"
 	"sync"
 	instructionsparser "tax-bro/pkg/instructions_parser"
 	"tax-bro/pkg/utils"
@@ -471,6 +472,96 @@ func processMessages(queue *msgQueue) *update {
 	return &u
 }
 
+func deduplicateTimestamps(rpcClient *rpc.Client, db *sqlx.DB) {
+	txs := []struct {
+		slot       int64
+		block_time time.Time
+		signature  string
+	}{}
+	selectQuery := `
+		SELECT
+			t1.slot, t1.block_time, signature.value as signature
+		FROM
+			transaction t1
+		INNER JOIN
+			signature ON signature.id = t1.signature_id
+		WHERE t1.block_index IS NULL AND EXISTS (
+			SELECT
+				1
+			FROM
+				transaction t2
+			WHERE
+				t2.block_index IS NULL
+				AND t1.slot = t2.slot AND t1.block_time = t2.block_time
+		)
+		ORDER BY
+			slot
+	`
+	err := db.Select(txs, selectQuery)
+	utils.Assert(err == nil, fmt.Sprint(err))
+
+	if len(txs) == 0 {
+		return
+	}
+
+	type slotData struct {
+		slot       int64
+		signatures []string
+	}
+	slots := []slotData{}
+	i := 0
+	for {
+		if i > len(txs) {
+			break
+		}
+		tx := txs[i]
+		slotsIdx := len(slots) - 1
+		if slots[slotsIdx].slot == tx.slot {
+			i += 1
+			slots[slotsIdx].signatures = append(slots[slotsIdx].signatures, tx.signature)
+			continue
+		}
+		slots = append(slots, slotData{
+			slot:       tx.slot,
+			signatures: []string{tx.signature},
+		})
+	}
+
+	type SignatureWithBlockIndex struct {
+		Signature  string
+		BlockIndex int32 `db:"block_index"`
+	}
+	deduped := []SignatureWithBlockIndex{}
+	for _, slotData := range slots {
+		blockResult, err := callRpcWithRetries(func() (*rpc.GetBlockResult, error) {
+			return rpcClient.GetBlock(context.Background(), uint64(slotData.slot))
+		}, 5)
+		utils.Assert(err == nil, fmt.Sprint(err))
+
+		for _, signature := range slotData.signatures {
+			idx := slices.IndexFunc(blockResult.Signatures, func(s solana.Signature) bool {
+				return s.String() == signature
+			})
+			utils.Assert(idx > -1, "unable to find signature in block")
+			deduped = append(deduped, SignatureWithBlockIndex{
+				Signature:  signature,
+				BlockIndex: int32(idx),
+			})
+		}
+	}
+
+	updateQuery := `
+		UPDATE transaction
+		SET block_index = data.bi
+		FROM (
+			VALUES (:signature, :block_index)
+		) AS data(s, bi)
+		WHERE transaction.signature_id = (SELECT id FROM signature WHERE signature.value = data.s)
+	`
+	_, err = db.NamedExec(updateQuery, deduped)
+	utils.Assert(err == nil, fmt.Sprint(err))
+}
+
 func RunWalletSync(rpcClient *rpc.Client, db *sqlx.DB, ctx context.Context) {
 	var wg sync.WaitGroup
 	wg.Add(2)
@@ -514,6 +605,8 @@ func RunWalletSync(rpcClient *rpc.Client, db *sqlx.DB, ctx context.Context) {
 				}
 				u.saveTransactions(db)
 				u.updateUser(db)
+
+				deduplicateTimestamps(rpcClient, db)
 			}
 		}
 	}()
