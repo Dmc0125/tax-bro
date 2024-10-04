@@ -12,6 +12,7 @@ import (
 
 	"github.com/gagliardetto/solana-go"
 	"github.com/gagliardetto/solana-go/rpc"
+	"github.com/lib/pq"
 )
 
 func decompileAccounts(msg *solana.Message, meta *rpc.TransactionMeta) []string {
@@ -62,7 +63,7 @@ type onchainInstructionBase struct {
 
 func (oix *onchainInstructionBase) prepareForInsert(
 	insertedAccounts accounts,
-) (programAccountId int32, accountsIds []int32, data string, err error) {
+) (programAccountId int32, accountsIds pq.Int32Array, data string, err error) {
 	programAccountId, err = insertedAccounts.getId(oix.programAddress)
 	for _, a := range oix.accounts {
 		aId, err1 := insertedAccounts.getId(a)
@@ -95,7 +96,7 @@ func (oix *onchainInstructionBase) setFromCompiled(
 	oix.accounts = make([]string, len(compiled.Accounts))
 	for i := 0; i < len(compiled.Accounts); i++ {
 		accountIdx := compiled.Accounts[i]
-		oix.accounts = append(oix.accounts, txAccounts[accountIdx])
+		oix.accounts[i] = txAccounts[accountIdx]
 	}
 	oix.programAddress = txAccounts[compiled.ProgramIDIndex]
 	oix.data = compiled.Data
@@ -105,6 +106,20 @@ type onchainInstruction struct {
 	onchainInstructionBase
 	InnerIxs []onchainInstructionBase
 	events   []instructionsparser.Event
+}
+
+func (oix *onchainInstruction) prepare(signatureId int32, ixIndex int16, insertedAccounts accounts) (map[string]interface{}, error) {
+	programAccountId, accountsIds, data, err := oix.onchainInstructionBase.prepareForInsert(insertedAccounts)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]interface{}{
+		"signature_id":       signatureId,
+		"index":              ixIndex,
+		"program_account_id": programAccountId,
+		"accounts_ids":       accountsIds,
+		"data":               data,
+	}, nil
 }
 
 type onchainTransaction struct {
@@ -118,6 +133,19 @@ type onchainTransaction struct {
 
 	Ixs  []onchainInstruction
 	Logs []string
+}
+
+func (otx *onchainTransaction) prepare(signatureId int32, accountsIds pq.Int32Array) map[string]interface{} {
+	return map[string]interface{}{
+		"signature_id":           signatureId,
+		"accounts_ids":           accountsIds,
+		"timestamp":              otx.Timestamp,
+		"timestamp_granularized": otx.TimestampGranularized,
+		"slot":                   otx.Slot,
+		"err":                    otx.Err,
+		"fee":                    otx.Fee,
+		"logs":                   pq.StringArray(otx.Logs),
+	}
 }
 
 var maxSupportedTransactionVersion = uint64(0)

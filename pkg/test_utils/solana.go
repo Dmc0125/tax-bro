@@ -1,17 +1,54 @@
-package main
+package testutils
 
 import (
 	"context"
 	"errors"
+	"fmt"
+	"io/fs"
 	"log"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync"
+	"tax-bro/pkg/utils"
 	"time"
 
 	"github.com/gagliardetto/solana-go"
 	"github.com/gagliardetto/solana-go/rpc"
 )
 
-func forceSendTx(
+func SetupSolana() (*rpc.Client, []solana.Wallet) {
+	rpcUrl := os.Getenv("RPC_URL")
+	rpcClient := rpc.New(rpcUrl)
+
+	wallets := []solana.Wallet{}
+	solanaDir := os.Getenv("SOLANA_DIR")
+	err := filepath.Walk(solanaDir, func(path string, info fs.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() {
+			return nil
+		}
+		name := info.Name()
+		if strings.HasPrefix(name, "pk_") && strings.HasSuffix(name, ".json") {
+			pk, err := solana.PrivateKeyFromSolanaKeygenFile(path)
+			if err != nil {
+				return err
+			}
+			wallet := solana.Wallet{
+				PrivateKey: pk,
+			}
+			wallets = append(wallets, wallet)
+		}
+		return nil
+	})
+	utils.Assert(err == nil, fmt.Sprint(err))
+
+	return rpcClient, wallets
+}
+
+func ForceSendTx(
 	rpcClient *rpc.Client,
 	wallet *solana.Wallet,
 	ixs []solana.Instruction,
@@ -125,7 +162,7 @@ func forceSendTx(
 	wg.Wait()
 }
 
-func forceSendTxs(
+func ForceSendTxs(
 	rpcClient *rpc.Client,
 	wallet *solana.Wallet,
 	txs [][]solana.Instruction,
@@ -134,7 +171,7 @@ func forceSendTxs(
 	for _, ixs := range txs {
 		wg.Add(1)
 		go func() {
-			forceSendTx(rpcClient, wallet, ixs)
+			ForceSendTx(rpcClient, wallet, ixs)
 			wg.Done()
 		}()
 	}

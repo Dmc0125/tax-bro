@@ -27,6 +27,11 @@ type parsedOnchainTransactionMsg struct {
 	accounts    []instructionsparser.AssociatedAccount
 }
 
+type lasgTransactionMsg struct {
+	walletId  int32
+	signature string
+}
+
 type msgQueue struct {
 	m     *sync.Mutex
 	items []interface{}
@@ -81,9 +86,10 @@ func fetchAndParse(rpcClient *rpc.Client, db *sqlx.DB, req syncWalletRequest, qu
 		Commitment: rpc.CommitmentConfirmed,
 		Limit:      &limit,
 	}
-	if req.LastSignature != "" {
-		getSignaturesOpts.Until = solana.MustSignatureFromBase58(req.LastSignature)
+	if req.LastSignature.Valid {
+		getSignaturesOpts.Until = solana.MustSignatureFromBase58(req.LastSignature.String)
 	}
+	newLastSignature := ""
 
 	for {
 		signaturesRes, err := callRpcWithRetries(
@@ -109,7 +115,11 @@ func fetchAndParse(rpcClient *rpc.Client, db *sqlx.DB, req syncWalletRequest, qu
 			signatures[i] = signaturesRes[i].Signature.String()
 		}
 
-		savedTransactions := Transactions{}
+		if newLastSignature == "" {
+			newLastSignature = signatures[0]
+		}
+
+		savedTransactions := transactions{}
 		savedTransactions.Get(db, signatures)
 
 		if len(savedTransactions) > 0 {
@@ -165,6 +175,11 @@ func fetchAndParse(rpcClient *rpc.Client, db *sqlx.DB, req syncWalletRequest, qu
 			break
 		}
 	}
+
+	queue.append(lasgTransactionMsg{
+		walletId:  req.WalletId,
+		signature: newLastSignature,
+	})
 }
 
 type update struct {
@@ -172,48 +187,35 @@ type update struct {
 	transactions       []onchainTransaction
 	signaturesIds      []int32
 	associatedAccounts []instructionsparser.AssociatedAccount
+	lastSignature      string
 }
 
-func (u *update) saveTransactions(db *sqlx.DB) {
-	tx, err := db.Beginx()
-	utils.Assert(err == nil, fmt.Sprintf("unable to begin tx error: %s", err))
-	defer tx.Rollback()
+type insertableComponents struct {
+	txs      []map[string]interface{}
+	ixs      []map[string]interface{}
+	innerIxs []map[string]interface{}
+}
 
-	insertableSignatures := make(pq.StringArray, len(u.transactions))
-	insertableAddresses := make(pq.StringArray, 0)
-	for i := 0; i < len(u.transactions); i++ {
-		tx := &u.transactions[i]
-		insertableSignatures[i] = tx.Signature
-		insertableAddresses = append(insertableAddresses, tx.accounts...)
+func prepareInsertableComponents(transactions []onchainTransaction, insertedSignatures signatures, insertedAccounts accounts) insertableComponents {
+	components := insertableComponents{
+		txs:      []map[string]interface{}{},
+		ixs:      []map[string]interface{}{},
+		innerIxs: []map[string]interface{}{},
 	}
 
-	insertedSignatures := signatures{}
-	insertedSignatures.save(tx, insertableSignatures)
-
-	for i := 0; i < len(insertedSignatures); i++ {
-		u.signaturesIds = append(u.signaturesIds, insertedSignatures[i].Id)
-	}
-
-	insertedAccounts := accounts{}
-	insertedAccounts.save(tx, insertableAddresses)
-
-	insertableTxs := []map[string]interface{}{}
-	insertableIxs := []map[string]interface{}{}
-	insertableInnerIxs := []map[string]interface{}{}
-
-	for i := 0; i < len(u.transactions); i++ {
-		tx := &u.transactions[i]
+	for i := 0; i < len(transactions); i++ {
+		tx := &transactions[i]
 
 		signatureId, err := insertedSignatures.getId(tx.Signature)
 		utils.Assert(err == nil, fmt.Sprintf("invalid update: %s", err))
-		accountsIds := make([]int32, len(tx.accounts))
+		accountsIds := make(pq.Int32Array, len(tx.accounts))
 		for _, a := range tx.accounts {
 			aId, err := insertedAccounts.getId(a)
 			utils.Assert(err == nil, fmt.Sprintf("invalid update: %s", err))
 			accountsIds = append(accountsIds, aId)
 		}
 
-		insertableTxs = append(insertableTxs, map[string]interface{}{
+		components.txs = append(components.txs, map[string]interface{}{
 			"signature_id":           signatureId,
 			"accounts_ids":           accountsIds,
 			"timestamp":              tx.Timestamp,
@@ -229,7 +231,7 @@ func (u *update) saveTransactions(db *sqlx.DB) {
 			programAccountId, accountsIds, data, err := ix.prepareForInsert(insertedAccounts)
 			utils.Assert(err == nil, fmt.Sprintf("invalid update: %s", err))
 
-			insertableIxs = append(insertableIxs, map[string]interface{}{
+			components.ixs = append(components.ixs, map[string]interface{}{
 				"signature_id":       signatureId,
 				"index":              int16(ixIndex),
 				"program_account_id": programAccountId,
@@ -244,7 +246,7 @@ func (u *update) saveTransactions(db *sqlx.DB) {
 				)
 				utils.Assert(err == nil, fmt.Sprintf("invalid update: %s", err))
 
-				insertableInnerIxs = append(insertableInnerIxs, map[string]interface{}{
+				components.innerIxs = append(components.innerIxs, map[string]interface{}{
 					"signature_id":       signatureId,
 					"ix_index":           int16(ixIndex),
 					"index":              int16(innerIxIndex),
@@ -256,47 +258,77 @@ func (u *update) saveTransactions(db *sqlx.DB) {
 		}
 	}
 
-	if len(insertableTxs) > 0 {
-		_, err = tx.Exec(
+	return components
+}
+
+func (u *update) saveTransactions(db *sqlx.DB) {
+	tx, err := db.Beginx()
+	utils.Assert(err == nil, fmt.Sprintf("unable to begin tx error: %s", err))
+	defer tx.Rollback()
+
+	insertableSignatures := make(pq.StringArray, len(u.transactions))
+	insertableAddresses := make(map[string]bool, 0)
+	for i := 0; i < len(u.transactions); i++ {
+		tx := &u.transactions[i]
+		insertableSignatures[i] = tx.Signature
+
+		for _, account := range tx.accounts {
+			insertableAddresses[account] = true
+		}
+	}
+
+	insertedSignatures := signatures{}
+	insertedSignatures.save(tx, insertableSignatures)
+
+	for i := 0; i < len(insertedSignatures); i++ {
+		u.signaturesIds = append(u.signaturesIds, insertedSignatures[i].Id)
+	}
+
+	insertedAccounts := accounts{}
+	insertedAccounts.save(tx, insertableAddresses)
+	insertableComponents := prepareInsertableComponents(u.transactions, insertedSignatures, insertedAccounts)
+
+	if len(insertableComponents.txs) > 0 {
+		_, err = tx.NamedExec(
 			`INSERT INTO
 				transaction (signature_id, accounts_ids, timestamp, timestamp_granularized, logs, slot, err, fee)
 			VALUES (:signature_id, :accounts_ids, :timestamp, :timestamp_granularized, :logs, :slot, :err, :fee)`,
-			insertableTxs,
+			insertableComponents.txs,
 		)
 		utils.Assert(err == nil, fmt.Sprintf("unable to insert txs: %s", err))
 	}
 
-	if len(insertableIxs) > 0 {
-		_, err := tx.Exec(
+	if len(insertableComponents.ixs) > 0 {
+		_, err := tx.NamedExec(
 			`INSERT INTO
 				instruction (signature_id, index, program_account_id, accounts_ids, data)
 			VALUES (:signature_id, :index, :program_account_id, :accounts_ids, :data)`,
-			insertableIxs,
+			insertableComponents.ixs,
 		)
 		utils.Assert(err == nil, fmt.Sprintf("unable to insert ixs: %s", err))
 	}
 
-	if len(insertableInnerIxs) > 0 {
-		_, err := tx.Exec(
+	if len(insertableComponents.innerIxs) > 0 {
+		_, err := tx.NamedExec(
 			`INSERT INTO
 				instruction (signature_id, ix_index, index, program_account_id, accounts_ids, data)
 			VALUES (:signature_id, :ix_index,:index, :program_account_id, :accounts_ids, :data)`,
-			insertableInnerIxs,
+			insertableComponents.innerIxs,
 		)
 		utils.Assert(err == nil, fmt.Sprintf("unable to insert inner ixs: %s", err))
 	}
 
 	err = tx.Commit()
 	utils.Assert(err == nil, fmt.Sprintf("unable to commit tx: %s", err))
+	return
 }
 
 func (u *update) updateUser(db *sqlx.DB) {
-	tx, err := db.Beginx()
-	utils.Assert(err == nil, fmt.Sprintf("unable to begin tx error: %s", err))
-	defer tx.Rollback()
-
 	if len(u.signaturesIds) > 0 {
-		walletsIds := make([]int32, len(u.signaturesIds))
+		tx, err := db.Beginx()
+		utils.Assert(err == nil, fmt.Sprintf("unable to begin tx error: %s", err))
+
+		walletsIds := make(pq.Int32Array, len(u.signaturesIds))
 		for i := 0; i < len(u.signaturesIds); i++ {
 			walletsIds[i] = u.walletId
 		}
@@ -304,10 +336,10 @@ func (u *update) updateUser(db *sqlx.DB) {
 		res, err := tx.Exec(
 			`INSERT INTO
 				wallet_to_signature (signature_id, wallet_id) (
-					SELECT * FROM unzip($1::integer[], $2::integer[])
+					SELECT * FROM unnest($1::integer[], $2::integer[])
 				)
-			ON CONFICT (signature_id, wallet_id) DO NOTHING`,
-			u.signaturesIds,
+			ON CONFLICT (signature_id, wallet_id) DO NOTHING`,
+			pq.Int32Array(u.signaturesIds),
 			walletsIds,
 		)
 		utils.Assert(err == nil, fmt.Sprintf("unable to insert wts: %s", err))
@@ -322,14 +354,35 @@ func (u *update) updateUser(db *sqlx.DB) {
 			)
 			utils.Assert(err == nil, fmt.Sprintf("unable to update wallet: %s", err))
 		}
+
+		err = tx.Commit()
+		utils.Assert(err == nil, fmt.Sprint(err))
+	}
+
+	if u.lastSignature != "" {
+		_, err := db.Exec(
+			`UPDATE
+				wallet
+			SET
+				last_signature_id = (
+					SELECT signature.id FROM signature WHERE signature.value = $1
+				)
+			WHERE id = $2`,
+			u.lastSignature,
+			u.walletId,
+		)
+		utils.Assert(err == nil, fmt.Sprintf("unable to update wallet: %s", err))
 	}
 
 	if len(u.associatedAccounts) > 0 {
+		tx, err := db.Beginx()
+		utils.Assert(err == nil, fmt.Sprint(err))
+
 		addresses := make(pq.StringArray, len(u.associatedAccounts))
 		for i := 0; i < len(u.associatedAccounts); i++ {
 			addresses[i] = u.associatedAccounts[i].Address
 		}
-		accounts := []Account{}
+		accounts := []account{}
 		tx.Select(
 			&accounts,
 			`SELECT
@@ -367,10 +420,10 @@ func (u *update) updateUser(db *sqlx.DB) {
 			)
 			utils.Assert(err == nil, fmt.Sprintf("unable to update wallet: %s", err))
 		}
-	}
 
-	err = tx.Commit()
-	utils.Assert(err == nil, fmt.Sprintf("unable to commit tx: %s", err))
+		err = tx.Commit()
+		utils.Assert(err == nil, fmt.Sprintf("unable to commit tx: %s", err))
+	}
 }
 
 func processMessages(queue *msgQueue) *update {
@@ -398,10 +451,15 @@ func processMessages(queue *msgQueue) *update {
 					u.associatedAccounts = append(u.associatedAccounts, msg.accounts...)
 					return true
 				}
+			case lasgTransactionMsg:
+				if u.walletId == msg.walletId || u.walletId == -1 {
+					u.walletId = msg.walletId
+					u.lastSignature = msg.signature
+					return true
+				}
 			default:
 				log.Fatalf("invalid message: %#v", msg)
 			}
-
 			return false
 		},
 		func() bool {

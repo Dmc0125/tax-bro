@@ -1,6 +1,7 @@
 package walletsync
 
 import (
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -14,9 +15,9 @@ import (
 )
 
 type syncWalletRequest struct {
-	WalletId      int32  `db:"wallet_id"`
-	WalletAddress string `db:"address"`
-	LastSignature string `db:"last_signature"`
+	WalletId      int32          `db:"wallet_id"`
+	WalletAddress string         `db:"address"`
+	LastSignature sql.NullString `db:"last_signature"`
 }
 
 func (req *syncWalletRequest) updateStatus(db *sqlx.DB, status string) {
@@ -44,13 +45,13 @@ func (q *syncWalletQueue) load(db *sqlx.DB) {
 		FROM
 			sync_wallet_request
 		INNER JOIN
-			address ON address.id = sync_wallet_request.address_id
-		INNER JOIN
 			wallet ON wallet.id = sync_wallet_request.wallet_id
+		INNER JOIN
+			address ON address.id = wallet.address_id
 		LEFT JOIN
-			signature ON wallet.signature_id = wallet.last_signature_id
+			signature ON signature.id = wallet.last_signature_id
 		WHERE
-			sync_wallet_request.is_done = false
+			sync_wallet_request.status = 'queued'
 		ORDER BY
 			sync_wallet_request.created_at ASC
 		LIMIT
@@ -90,46 +91,54 @@ func (s signatures) getId(signature string) (int32, error) {
 	return 0, errors.New("unable to find signature id")
 }
 
-type Account struct {
+type account struct {
 	Id      int32
 	Address string
+	Ord     int32
 }
 
-type accounts []Account
+type accounts []account
 
-func (a *accounts) save(tx *sqlx.Tx, insertableAddresses pq.StringArray) {
-	if len(insertableAddresses) > 0 {
-		savedAddresses := []Account{}
+func (a *accounts) save(tx *sqlx.Tx, insertableAddressesUnique map[string]bool) {
+	if len(insertableAddressesUnique) == 0 {
+		return
+	}
+
+	insertableAddresses := make(pq.StringArray, 0)
+	for address := range insertableAddressesUnique {
+		insertableAddresses = append(insertableAddresses, address)
+	}
+
+	savedAddresses := []account{}
+	err := tx.Select(
+		&savedAddresses,
+		`SELECT id, value as address FROM address WHERE value = ANY($1)`,
+		insertableAddresses,
+	)
+	utils.Assert(err == nil, fmt.Sprintf("unable to select addresses: %s", err))
+	*a = append(*a, savedAddresses...)
+
+	unsavedAddresses := make(pq.StringArray, 0)
+	for _, a := range insertableAddresses {
+		idx := slices.IndexFunc(savedAddresses, func(sa account) bool {
+			return sa.Address == a
+		})
+		if idx == -1 {
+			unsavedAddresses = append(unsavedAddresses, a)
+		}
+	}
+
+	if len(unsavedAddresses) > 0 {
+		insertedAddresses := []account{}
 		err := tx.Select(
-			&savedAddresses,
-			`SELECT id, value as address FROM address WHERE value = ANY($1)`,
-			insertableAddresses,
+			&insertedAddresses,
+			`INSERT INTO address (value) (
+				SELECT * FROM unnest($1::varchar[])
+			) RETURNING id, value as address`,
+			unsavedAddresses,
 		)
-		utils.Assert(err == nil, fmt.Sprintf("unable to select addresses: %s", err))
-		*a = append(*a, savedAddresses...)
-
-		unsavedAddresses := make(pq.StringArray, 0)
-		for _, a := range insertableAddresses {
-			idx := slices.IndexFunc(savedAddresses, func(sa Account) bool {
-				return sa.Address == a
-			})
-			if idx == -1 {
-				unsavedAddresses = append(unsavedAddresses, a)
-			}
-		}
-
-		if len(unsavedAddresses) > 0 {
-			insertedAddresses := []Account{}
-			err := tx.Select(
-				&insertedAddresses,
-				`INSERT INTO address (value) (
-					SELECT * FROM unnest($1::varchar[])
-				) RETURNING id, value`,
-				unsavedAddresses,
-			)
-			utils.Assert(err == nil, fmt.Sprintf("unable to insert accounts: %s", err))
-			*a = append(*a, insertedAddresses...)
-		}
+		utils.Assert(err == nil, fmt.Sprintf("unable to insert accounts: %s", err))
+		*a = append(*a, insertedAddresses...)
 	}
 }
 
@@ -144,7 +153,7 @@ func (a accounts) getId(address string) (int32, error) {
 
 type instructionBase struct {
 	ProgramAddress string `json:"program_address"`
-	Accounts       []Account
+	Accounts       []account
 	Data           string
 }
 
@@ -182,9 +191,9 @@ type transaction struct {
 	Logs        []string
 }
 
-type Transactions []transaction
+type transactions []transaction
 
-func (txs Transactions) contains(signature string) bool {
+func (txs transactions) contains(signature string) bool {
 	for i := 0; i < len(txs); i++ {
 		if txs[i].Signature == signature {
 			return true
@@ -199,13 +208,17 @@ func selectAccountsCoalesce(tableName string) string {
 			SELECT coalesce(json_agg(agg), '[]') FROM (
 				SELECT
 					address.id,
-					address.value AS address
+					address.value AS address,
+					array_position(%s.accounts_ids, id) AS ord
 				FROM
 					address
 				WHERE
 					address.id = ANY(%s.accounts_ids)
+				ORDER BY
+					ord ASC
 			) AS agg
 		)`,
+		tableName,
 		tableName,
 	)
 }
@@ -221,7 +234,7 @@ func (qr *transactionQueryResult) unmarshalIxs() (ixs []instruction, err error) 
 	return
 }
 
-func (txs *Transactions) Get(db *sqlx.DB, signatures []string) {
+func (txs *transactions) Get(db *sqlx.DB, signatures []string) {
 	q := fmt.Sprintf(
 		`SELECT
 			signature.value AS signature,

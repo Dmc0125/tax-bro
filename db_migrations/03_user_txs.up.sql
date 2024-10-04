@@ -1,4 +1,4 @@
-INSERT INTO with_timestamps (table_name) VALUES 
+INSERT INTO with_timestamps (table_name) VALUES
     ('wallet'),
     ('wallet_to_signature'),
     ('associated_account'),
@@ -21,7 +21,7 @@ CREATE TABLE wallet (
 );
 
 CREATE TABLE wallet_to_signature (
-    id uuid PRIMARY KEY NOT NULL,
+    id uuid PRIMARY KEY NOT NULL DEFAULT uuid_generate_v4(),
     wallet_id INTEGER NOT NULL,
     signature_id INTEGER NOT NULL,
 
