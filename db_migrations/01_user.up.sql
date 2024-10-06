@@ -8,10 +8,16 @@ CREATE TABLE "user" (
 );
 
 CREATE TABLE github_auth_data (
-    user_id INTEGER NOT NULL,
+    user_id INTEGER NOT NULL UNIQUE,
     github_id INTEGER PRIMARY KEY NOT NULL,
     username VARCHAR(100) NOT NULL,
-    email VARCHAR(255) NOT NULL,
+
+    FOREIGN KEY (user_id) REFERENCES "user"(id)
+);
+
+CREATE TABLE session (
+    id uuid PRIMARY KEY NOT NULL DEFAULT uuid_generate_v4(),
+    user_id INTEGER NOT NULL UNIQUE,
 
     FOREIGN KEY (user_id) REFERENCES "user"(id)
 );

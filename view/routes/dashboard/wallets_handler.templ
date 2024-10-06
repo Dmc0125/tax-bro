@@ -1,0 +1,14 @@
+package dashboard
+
+import (
+    "github.com/labstack/echo/v4"
+    "tax-bro/view/utils"
+)
+
+templ Wallets() {
+    <div>Wallets</div>
+}
+
+func WalletsHandler(c echo.Context) error {
+	return utils.Render(c, Wallets())
+}

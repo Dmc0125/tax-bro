@@ -1,0 +1,21 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@font-face {
+    font-family: "Inter";
+    src: url("/assets/inter.ttf");
+    font-weight: 100 1000;
+}
+
+* {
+    font-family: Inter;
+}
+
+.card {
+    @apply border-slate-200 border shadow-sm rounded-md;
+}
+
+.btn {
+    @apply border-slate-200 border rounded;
+}

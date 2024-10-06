@@ -1,3 +1,4 @@
 .env
 .db_data
 .solana
+tmp
