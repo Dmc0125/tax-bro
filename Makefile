@@ -13,4 +13,4 @@ live/tailwind:
 	bunx tailwindcss -i ./view/input.css -o ./view/assets/styles.css --minify --watch
 
 live:
-	make -j2 live/templ live/server
+	make -j3 live/tailwind live/templ live/server

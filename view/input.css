@@ -12,10 +12,19 @@
     font-family: Inter;
 }
 
-.card {
+.border-primary {
     @apply border-slate-200 border shadow-sm rounded-md;
 }
 
-.btn {
+.border-secondary {
     @apply border-slate-200 border rounded;
+}
+
+.heading-1 {
+    @apply text-slate-900 text-3xl font-semibold
+}
+
+
+.heading-2 {
+    @apply text-slate-900 text-xl font-semibold
 }

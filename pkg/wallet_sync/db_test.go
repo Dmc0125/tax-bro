@@ -127,9 +127,9 @@ func (s *DbTestSuite) seedSyncWalletRequest() (signature, account) {
 	err = db.Get(&account, "INSERT INTO address (value) VALUES ('account1') RETURNING id, value AS address")
 	require.Nil(t, err)
 
-	_, err = db.Exec("INSERT INTO \"user\" (auth_provider) VALUES ('github')")
+	_, err = db.Exec("INSERT INTO \"account\" (auth_provider) VALUES ('github')")
 	require.Nil(t, err)
-	_, err = db.Exec("INSERT INTO wallet (user_id, address_id, label) VALUES (1, $1, 'lll')", account.Id)
+	_, err = db.Exec("INSERT INTO wallet (account_id, address_id, label) VALUES (1, $1, 'lll')", account.Id)
 	require.Nil(t, err)
 	_, err = db.Exec("INSERT INTO sync_wallet_request (wallet_id) VALUES (1)")
 	require.Nil(t, err)

@@ -6,10 +6,10 @@ import (
 	"os"
 	"path"
 	"tax-bro/pkg/utils"
+	"tax-bro/view/auth"
+	"tax-bro/view/components"
 	"tax-bro/view/middlewares"
-	"tax-bro/view/routes/dashboard"
-	"tax-bro/view/routes/signin"
-	"tax-bro/view/routes/signout"
+	vutils "tax-bro/view/utils"
 
 	"github.com/joho/godotenv"
 	"github.com/labstack/echo/v4"
@@ -17,40 +17,32 @@ import (
 )
 
 func main() {
-	loadAndValidateEnv("GITHUB_CLIENT_ID", "GITHUB_CLIENT_SECRET", "DB_URL")
+	err := godotenv.Load()
+	utils.Assert(err == nil, fmt.Sprint(err))
 
 	e := echo.New()
 
-	// e.Use(middleware.Logger())
 	e.Use(middlewares.RegisterDb())
-	e.Use(middlewares.Auth)
+	e.Use(auth.AuthMiddleware)
 
 	dir, err := os.Getwd()
 	utils.Assert(err == nil, fmt.Sprint(err))
 	e.Static("/assets/", path.Join(dir, "view/assets"))
 
 	e.GET("/", func(c echo.Context) error {
-		return c.String(http.StatusOK, "Hello, World!")
+		return c.HTML(http.StatusOK, "HELLO")
 	})
 
-	e.GET("/signin", signin.SigninHandler)
-	e.GET("/signin/:provider", signin.AuthorizeHandler)
-	e.GET("/signin/:provider/callback", signin.CallbackHandler)
+	e.GET("/signin", func(c echo.Context) error {
+		return vutils.Render(c, components.SignInView())
+	})
+	e.GET("/signin/:provider", auth.HandleSignIn)
+	e.GET("/signin/:provider/callback", auth.HandleSignInCallback)
+	e.GET("/signout", auth.HandleSignOut)
 
-	e.GET("/signout", signout.SignoutHandler)
-
-	e.GET("/dashboard/wallets", dashboard.WalletsHandler)
+	e.GET("/wallets", func(c echo.Context) error {
+		return c.HTML(http.StatusOK, "WALLETS")
+	})
 
 	e.Logger.Fatal(e.Start(":3000"))
-}
-
-func loadAndValidateEnv(keys ...string) {
-	err := godotenv.Load()
-	utils.Assert(err == nil, fmt.Sprint(err))
-
-	for _, k := range keys {
-		v := os.Getenv(k)
-		utils.Assert(len(v) > 0, fmt.Sprintf("ENV variable \"%s\" is missing", k))
-	}
-
 }

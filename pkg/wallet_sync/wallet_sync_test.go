@@ -291,12 +291,12 @@ func (s *SyncTestSuite) TestWalletSync() {
 		}
 	}
 
-	_, err = db.Exec("INSERT INTO \"user\" (auth_provider) VALUES ('github')")
+	_, err = db.Exec("INSERT INTO \"account\" (auth_provider) VALUES ('github')")
 	require.NoError(t, err)
-	_, err = db.Exec("INSERT INTO wallet (user_id, address_id, label) VALUES (1, 1, 'test')")
+	_, err = db.Exec("INSERT INTO wallet (account_id, address_id, label) VALUES (1, 1, 'test')")
 	require.NoError(t, err)
 
-	u.updateUser(db)
+	u.updateAccount(db)
 
 	type TestWti struct {
 		SignatureId int32 `db:"signature_id"`

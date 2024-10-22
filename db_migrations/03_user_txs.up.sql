@@ -6,14 +6,14 @@ INSERT INTO with_timestamps (table_name) VALUES
 
 CREATE TABLE wallet (
     id SERIAL PRIMARY KEY NOT NULL,
-    user_id INTEGER NOT NULL,
+    account_id INTEGER NOT NULL,
     last_signature_id INTEGER,
     address_id INTEGER NOT NULL,
 
-    FOREIGN KEY (user_id) REFERENCES "user"(id),
+    FOREIGN KEY (account_id) REFERENCES "account"(id),
     FOREIGN KEY (last_signature_id) REFERENCES "signature"(id),
     FOREIGN KEY (address_id) REFERENCES "address"(id),
-    UNIQUE (user_id, address_id),
+    UNIQUE (account_id, address_id),
 
     label VARCHAR(50) NOT NULL,
     signatures INTEGER NOT NULL DEFAULT 0,

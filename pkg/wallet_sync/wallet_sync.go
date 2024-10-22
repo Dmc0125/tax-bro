@@ -321,10 +321,9 @@ func (u *update) saveTransactions(db *sqlx.DB) {
 
 	err = tx.Commit()
 	utils.Assert(err == nil, fmt.Sprintf("unable to commit tx: %s", err))
-	return
 }
 
-func (u *update) updateUser(db *sqlx.DB) {
+func (u *update) updateAccount(db *sqlx.DB) {
 	if len(u.signaturesIds) > 0 {
 		tx, err := db.Beginx()
 		utils.Assert(err == nil, fmt.Sprintf("unable to begin tx error: %s", err))
@@ -604,7 +603,7 @@ func RunWalletSync(rpcClient *rpc.Client, db *sqlx.DB, ctx context.Context) {
 					continue
 				}
 				u.saveTransactions(db)
-				u.updateUser(db)
+				u.updateAccount(db)
 
 				deduplicateTimestamps(rpcClient, db)
 			}

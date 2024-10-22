@@ -7,7 +7,7 @@ import (
 	"strings"
 )
 
-func getStackTrace() string {
+func GetStackTrace() string {
 	pc := make([]uintptr, 10)
 	n := runtime.Callers(2, pc)
 	if n == 0 {
@@ -31,7 +31,7 @@ func getStackTrace() string {
 
 func Assert(cond bool, msg string) {
 	if !cond {
-		stackTrace := getStackTrace()
+		stackTrace := GetStackTrace()
 		log.Fatalf("Assertion failed: %s\nStack trace: %s\n", msg, stackTrace)
 	}
 }
