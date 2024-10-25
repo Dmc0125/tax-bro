@@ -49,5 +49,5 @@ CREATE TABLE sync_wallet_request (
     wallet_id INTEGER UNIQUE NOT NULL,
     "status" sync_wallet_request_status NOT NULL DEFAULT 'queued',
 
-    FOREIGN KEY (wallet_id) REFERENCES wallet(id)
+    FOREIGN KEY (wallet_id) REFERENCES wallet (id) ON DELETE CASCADE ON UPDATE CASCADE
 );

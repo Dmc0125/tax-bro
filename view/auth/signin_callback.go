@@ -39,8 +39,8 @@ func createAuthCookie(value string, maxAge int) *http.Cookie {
 }
 
 type auth struct {
-	ProviderType string `db:"p_type"`
-	ProviderId   string `db:"provider_id"`
+	ProviderType string `json:"p_type"`
+	ProviderId   string `json:"provider_id"`
 }
 
 func HandleSignInCallback(c echo.Context) error {
@@ -235,7 +235,7 @@ func HandleSignInCallback(c echo.Context) error {
 	err = db.Get(&session, "INSERT INTO session (expires_at, account_id) VALUES ($1, $2) RETURNING id", expiresAt, account.Id)
 
 	if err != nil && strings.HasPrefix(err.Error(), "pq: duplicate key value violates unique constraint") {
-		err = db.Get(&session, "UPDATE session SET expires_at = $1 WHERE account_id = $2", expiresAt, account.Id)
+		err = db.Get(&session, "UPDATE session SET expires_at = $1 WHERE account_id = $2 RETURNING id", expiresAt, account.Id)
 		if err != nil {
 			logger.Log(err)
 			return redirectErr(c, constants.ClientErrInternal)

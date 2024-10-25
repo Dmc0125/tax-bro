@@ -8,6 +8,7 @@ import (
 	"tax-bro/pkg/utils"
 	"tax-bro/view/auth"
 	"tax-bro/view/components"
+	"tax-bro/view/handlers/wallets"
 	"tax-bro/view/middlewares"
 	vutils "tax-bro/view/utils"
 
@@ -34,15 +35,15 @@ func main() {
 	})
 
 	e.GET("/signin", func(c echo.Context) error {
-		return vutils.Render(c, components.SignInView())
+		return vutils.RenderOk(c, components.SignInView())
 	})
 	e.GET("/signin/:provider", auth.HandleSignIn)
 	e.GET("/signin/:provider/callback", auth.HandleSignInCallback)
 	e.GET("/signout", auth.HandleSignOut)
 
-	e.GET("/wallets", func(c echo.Context) error {
-		return c.HTML(http.StatusOK, "WALLETS")
-	})
+	e.GET("/wallets", wallets.GET)
+	e.POST("/wallets", wallets.POST)
+	e.DELETE("/wallets/:id", wallets.DELETE)
 
 	e.Logger.Fatal(e.Start(":3000"))
 }

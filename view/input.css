@@ -28,3 +28,7 @@
 .heading-2 {
     @apply text-slate-900 text-xl font-semibold
 }
+
+.heading-3 {
+    @apply text-slate-900 font-medium
+}
