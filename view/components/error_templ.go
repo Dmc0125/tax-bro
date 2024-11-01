@@ -34,7 +34,7 @@ func GlobalErrorComponent(msg string) templ.Component {
 			templ_7745c5c3_Var1 = templ.NopComponent
 		}
 		ctx = templ.ClearChildren(ctx)
-		templ_7745c5c3_Err = templ.WriteWatchModeString(templ_7745c5c3_Buffer, 1)
+		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString("<div id=\"__global_err\" class=\"w-[320px] px-4 py-2 rounded-md border bg-red-500 text-slate-200 flex items-center gap-x-4 absolute top-4 left-1/2 -translate-x-1/2 sm:right-4 sm:left-0 sm:translate-x-0\"><svg class=\"w-8 h-8 flex-shrink-0\" xmlns=\"http://www.w3.org/2000/svg\" fill=\"none\" viewBox=\"0 0 24 24\" stroke-width=\"1.5\" stroke=\"currentColor\"><path stroke-linecap=\"round\" stroke-linejoin=\"round\" d=\"M12 9v3.75m9-.75a9 9 0 1 1-18 0 9 9 0 0 1 18 0Zm-9 3.75h.008v.008H12v-.008Z\"></path></svg> <span class=\"font-semibold\">")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -47,7 +47,7 @@ func GlobalErrorComponent(msg string) templ.Component {
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templ.WriteWatchModeString(templ_7745c5c3_Buffer, 2)
+		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString("</span></div><script>\n\t\t(() => {\n\t\t\tconst e = document.querySelector(\"#__global_err\")\n\t\t\tsetTimeout(() => {\n\t\t\t\te.setAttribute(\"style\", \"display: none\")\n\t\t\t}, 5000)\n\t\t})()\n    </script>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}

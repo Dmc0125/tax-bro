@@ -29,7 +29,7 @@ func Base(includeHtmx bool) templ.Component {
 			templ_7745c5c3_Var1 = templ.NopComponent
 		}
 		ctx = templ.ClearChildren(ctx)
-		templ_7745c5c3_Err = templ.WriteWatchModeString(templ_7745c5c3_Buffer, 1)
+		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString("<!doctype html><html lang=\"en\" class=\"w-full min-h-screen\"><head><meta charset=\"UTF-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\"><meta name=\"htmx-config\" content=\"{\n\t\t\t\t\t&#34;responseHandling&#34;:[\n\t\t\t\t\t\t{&#34;code&#34;:&#34;[2]..&#34;, &#34;swap&#34;: true},\n\t\t\t\t\t\t{&#34;code&#34;:&#34;[4]..&#34;, &#34;swap&#34;: true, &#34;error&#34;: true},\n\t\t\t\t\t\t{&#34;code&#34;:&#34;[5]..&#34;, &#34;swap&#34;: true, &#34;error&#34;: true}\n\t\t\t\t\t]\n\t\t\t\t}\"><title>Tax bro</title><link href=\"/assets/styles.css\" rel=\"stylesheet\"></head><body class=\"w-full min-h-screen bg-gray-100\">")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -37,17 +37,17 @@ func Base(includeHtmx bool) templ.Component {
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templ.WriteWatchModeString(templ_7745c5c3_Buffer, 2)
+		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString("</body>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
 		if includeHtmx {
-			templ_7745c5c3_Err = templ.WriteWatchModeString(templ_7745c5c3_Buffer, 3)
+			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString("<script src=\"https://unpkg.com/htmx.org@2.0.3\"></script>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 		}
-		templ_7745c5c3_Err = templ.WriteWatchModeString(templ_7745c5c3_Buffer, 4)
+		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString("</html>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}

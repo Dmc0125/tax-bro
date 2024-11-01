@@ -74,7 +74,7 @@ CREATE TYPE event_type AS ENUM ('transfer');
 CREATE TABLE instruction_event (
     signature_id INTEGER NOT NULL,
     -- index of instruction it belongs to
-    ix_index INTEGER NOT NULL,
+    ix_index SMALLINT NOT NULL,
     -- position of event
     "index" SMALLINT NOT NULL,
 

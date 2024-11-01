@@ -9,12 +9,13 @@ type ParsableInstruction interface {
 }
 
 type EventData interface {
-	Serialize() string
+	Serialize() []byte
 }
 
 type Event struct {
-	Kind int
-	Data EventData
+	Kind  string
+	Data  EventData
+	Index int16
 }
 
 type AssociatedAccount struct {
@@ -26,9 +27,9 @@ type AssociatedAccount struct {
 func Parse[T ParsableInstruction](
 	instruction ParsableInstruction,
 	innerInstructions []T,
-) ([]Event, []AssociatedAccount) {
-	events := make([]Event, 0)
-	associatedAccounts := make([]AssociatedAccount, 0)
+) ([]*Event, []*AssociatedAccount) {
+	events := make([]*Event, 0)
+	associatedAccounts := make([]*AssociatedAccount, 0)
 
 	switch instruction.GetProgramAddress() {
 	case system.ProgramID.String():
