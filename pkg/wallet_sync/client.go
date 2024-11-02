@@ -55,6 +55,10 @@ func fetchSyncWalletRequest(db *sqlx.DB) (syncWalletRequest, error) {
 	return req, err
 }
 
+func (req *syncWalletRequest) IsWallet() bool {
+	return true
+}
+
 func (req *syncWalletRequest) watchDelete(ctx context.Context, db *sqlx.DB, interruptChan chan struct{}) {
 	const q = "SELECT id FROM wallet WHERE id = $1"
 	w := struct{ Id int32 }{}
@@ -76,7 +80,7 @@ func (req *syncWalletRequest) watchDelete(ctx context.Context, db *sqlx.DB, inte
 	}
 }
 
-func (req *syncWalletRequest) getFetchSignaturesConfig() (solana.PublicKey, *rpc.GetSignaturesForAddressOpts) {
+func (req *syncWalletRequest) GetFetchSignaturesConfig() (solana.PublicKey, *rpc.GetSignaturesForAddressOpts) {
 	pubkey, err := solana.PublicKeyFromBase58(req.Address)
 	utils.AssertNoErr(err)
 
@@ -179,6 +183,7 @@ var fetchTransactionQuery = fmt.Sprintf(
 			) AS agg
 		) AS ixs,
 		transaction.logs,
+		transaction.err,
 		signature.value as signature,
 		signature.id as signature_id
 	FROM
@@ -202,8 +207,12 @@ func (ix *savedInstructionBase) GetProgramAddress() string {
 	return ix.ProgramAddress
 }
 
-func (ix *savedInstructionBase) GetAccountAddress(idx int) string {
-	return ix.Accounts[idx].Address
+func (ix *savedInstructionBase) GetAccountsAddresses() []string {
+	addresses := make([]string, len(ix.Accounts))
+	for i, account := range ix.Accounts {
+		addresses[i] = account.Address
+	}
+	return addresses
 }
 
 func (ix *savedInstructionBase) GetData() []byte {
@@ -214,6 +223,16 @@ type savedInstruction struct {
 	savedInstructionBase
 	InnerIxs []*savedInstructionBase `json:"inner_ixs"`
 }
+
+func (oix *savedInstruction) GetInnerInstructions() []instructionsparser.ParsableInstructionBase {
+	pixs := make([]instructionsparser.ParsableInstructionBase, len(oix.InnerIxs))
+	for i, ix := range oix.InnerIxs {
+		pixs[i] = ix
+	}
+	return pixs
+}
+
+func (ix *savedInstruction) AppendEvents(events ...instructionsparser.Event) {}
 
 func (ix *savedInstruction) intoParsable() (*savedInstruction, []*savedInstructionBase) {
 	innerIxs := []*savedInstructionBase{}
@@ -228,6 +247,7 @@ type savedTransaction struct {
 	Signature   string
 	Logs        pq.StringArray
 	Ixs         []*savedInstruction
+	Err         bool
 }
 
 func fetchSavedTransactions(db *sqlx.DB, signatures []string) []*savedTransaction {
@@ -245,6 +265,7 @@ func fetchSavedTransactions(db *sqlx.DB, signatures []string) []*savedTransactio
 		txs[i].Signature = tx.Signature
 		txs[i].SignatureId = tx.SignatureId
 		txs[i].Logs = tx.Logs
+		txs[i].Err = tx.Err
 
 		ixs := []*savedInstruction{}
 		err := json.Unmarshal(tx.Ixs, &ixs)
@@ -294,7 +315,7 @@ type savedMessage struct {
 	lastSignature      string
 }
 
-func newSavedMessage(txs []*savedTransaction) *savedMessage {
+func newSavedMessage(txs []*savedTransaction, parser *instructionsparser.Parser, isWallet bool) *savedMessage {
 	msg := &savedMessage{
 		signaturesIds:      make([]int32, len(txs)),
 		associatedAccounts: make([]*instructionsparser.AssociatedAccount, 0),
@@ -303,9 +324,18 @@ func newSavedMessage(txs []*savedTransaction) *savedMessage {
 	for i, tx := range txs {
 		msg.signaturesIds[i] = tx.SignatureId
 
+		if tx.Err {
+			continue
+		}
+
 		for _, ix := range tx.Ixs {
 			// parsableIx, parsableInnerIxs := ix.intoParsable()
-			_, associatedAccounts := instructionsparser.Parse(ix, ix.InnerIxs)
+			associatedAccounts := parser.Parse(ix)
+
+			if !isWallet {
+				continue
+			}
+
 			for _, aa := range associatedAccounts {
 				idx := slices.IndexFunc(msg.associatedAccounts, func(a *instructionsparser.AssociatedAccount) bool {
 					return a.Address == aa.Address
@@ -320,9 +350,13 @@ func newSavedMessage(txs []*savedTransaction) *savedMessage {
 	return msg
 }
 
-func (c *Client) fetchAndParseTransactions(ctx context.Context, req *syncWalletRequest, msgChan chan interface{}) {
-	defer close(msgChan)
-	pubkey, getSignaturesOpts := req.getFetchSignaturesConfig()
+type unsyncedAddress interface {
+	GetFetchSignaturesConfig() (solana.PublicKey, *rpc.GetSignaturesForAddressOpts)
+	IsWallet() bool
+}
+
+func (c *Client) fetchAndParseTransactions(ctx context.Context, req unsyncedAddress, parser *instructionsparser.Parser, msgChan chan interface{}) {
+	pubkey, getSignaturesOpts := req.GetFetchSignaturesConfig()
 	newLastSignature := ""
 
 	for {
@@ -364,7 +398,7 @@ func (c *Client) fetchAndParseTransactions(ctx context.Context, req *syncWalletR
 					dedupedSignatures := c.dedupSavedSignatures(chunk)
 
 					if len(dedupedSignatures.saved) > 0 {
-						msg := newSavedMessage(dedupedSignatures.saved)
+						msg := newSavedMessage(dedupedSignatures.saved, parser, req.IsWallet())
 						if isLastChunk && isLastIter && newLastSignature != "" {
 							msg.lastSignature = newLastSignature
 						}
@@ -380,19 +414,22 @@ func (c *Client) fetchAndParseTransactions(ctx context.Context, req *syncWalletR
 						if isLastIter && isLastChunk && len(newLastSignature) > 0 {
 							msg.lastSignature = newLastSignature
 						}
-						for j, signature := range dedupedSignatures.unsaved {
+						for ixIndex, signature := range dedupedSignatures.unsaved {
 							select {
 							case <-ctx.Done():
 								slog.Info("context done, exiting fetchOnchainTransaction")
 								return
 							default:
 								otx := fetchOnchainTransaction(ctx, c.rpcClient, signature)
-								for _, ix := range otx.ixs {
-									events, associatedAccounts := instructionsparser.Parse(ix, ix.innerIxs)
-									ix.events = events
-									msg.addAssociatedAccounts(associatedAccounts)
+								if !otx.err {
+									for _, ix := range otx.ixs {
+										associatedAccounts := parser.Parse(ix)
+										if req.IsWallet() {
+											msg.addAssociatedAccounts(associatedAccounts)
+										}
+									}
 								}
-								msg.txs[j] = otx
+								msg.txs[ixIndex] = otx
 							}
 						}
 						slog.Info(
@@ -680,9 +717,15 @@ func (c *Client) Run() {
 			}()
 
 			msgChan := make(chan interface{})
+			parser := instructionsparser.New(request.Address, request.WalletId, c.db)
 
-			go c.fetchAndParseTransactions(reqCtx, &request, msgChan)
 			go c.handleParsedTransactions(&request, msgChan)
+
+			c.fetchAndParseTransactions(reqCtx, &request, parser, msgChan)
+			for _, associatedAccount := range parser.AssociatedAccounts {
+				c.fetchAndParseTransactions(reqCtx, associatedAccount, parser, msgChan)
+			}
+			close(msgChan)
 		}
 	}
 }

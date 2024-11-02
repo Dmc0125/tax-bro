@@ -69,7 +69,7 @@ CREATE TABLE inner_instruction (
     FOREIGN KEY (program_account_id) REFERENCES "address"(id)
 );
 
-CREATE TYPE event_type AS ENUM ('transfer');
+CREATE TYPE event_type AS ENUM ('transfer', 'mint', 'burn', 'close_account');
 
 CREATE TABLE instruction_event (
     signature_id INTEGER NOT NULL,

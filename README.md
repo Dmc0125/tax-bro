@@ -1,6 +1,14 @@
 # Testing
 
+- Set environment variables into .env.sync_testing
+
+```.env
+RPC_URL=
+WALLET=
+```
+
+- Run sync testing
+
 ```sh
-systemctl --user start docker
-go test ./...
+go run ./cmd/sync_testing/main.go
 ```

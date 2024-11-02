@@ -10,7 +10,7 @@ CREATE TABLE wallet (
     last_signature_id INTEGER,
     address_id INTEGER NOT NULL,
 
-    FOREIGN KEY (account_id) REFERENCES "account"(id),
+    FOREIGN KEY (account_id) REFERENCES "account"(id) ON DELETE CASCADE ON UPDATE CASCADE,
     FOREIGN KEY (last_signature_id) REFERENCES "signature"(id),
     FOREIGN KEY (address_id) REFERENCES "address"(id),
     UNIQUE (account_id, address_id),
@@ -25,18 +25,21 @@ CREATE TABLE wallet_to_signature (
     wallet_id INTEGER NOT NULL,
     signature_id INTEGER NOT NULL,
 
-    FOREIGN KEY (wallet_id) REFERENCES wallet(id),
+    FOREIGN KEY (wallet_id) REFERENCES wallet(id) ON DELETE CASCADE ON UPDATE CASCADE,
     FOREIGN KEY (signature_id) REFERENCES "signature"(id),
     UNIQUE (wallet_id, signature_id)
 );
+
+CREATE TYPE associated_account_type AS ENUM ('token')
 
 CREATE TABLE associated_account (
     id SERIAL PRIMARY KEY NOT NULL,
     wallet_id INTEGER NOT NULL,
     address_id INTEGER NOT NULL,
     last_signature_id INTEGER,
+    "type" associated_account_type NOT NULL,
 
-    FOREIGN KEY (wallet_id) REFERENCES wallet(id),
+    FOREIGN KEY (wallet_id) REFERENCES wallet(id) ON DELETE CASCADE ON UPDATE CASCADE,
     FOREIGN KEY (last_signature_id) REFERENCES "signature"(id),
     FOREIGN KEY (address_id) REFERENCES "address"(id),
     UNIQUE (wallet_id, address_id)

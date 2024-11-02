@@ -27,8 +27,8 @@ func (base *onchainInstructionBase) GetProgramAddress() string {
 	return base.programAddress
 }
 
-func (base *onchainInstructionBase) GetAccountAddress(idx int) string {
-	return base.accounts[idx]
+func (base *onchainInstructionBase) GetAccountsAddresses() []string {
+	return base.accounts
 }
 
 func (base *onchainInstructionBase) GetData() []byte {
@@ -75,7 +75,21 @@ func (base *onchainInstructionBase) intoInsertable(accounts []database.Account) 
 type onchainInstruction struct {
 	onchainInstructionBase
 	innerIxs []*onchainInstructionBase
-	events   []*instructionsparser.Event
+	events   []instructionsparser.Event
+}
+
+func (oix *onchainInstruction) GetInnerInstructions() []instructionsparser.ParsableInstructionBase {
+	pixs := make([]instructionsparser.ParsableInstructionBase, len(oix.innerIxs))
+	for i, ix := range oix.innerIxs {
+		pixs[i] = ix
+	}
+	return pixs
+}
+
+func (oix *onchainInstruction) AppendEvents(events ...instructionsparser.Event) {
+	for _, event := range events {
+		oix.events = append(oix.events, event)
+	}
 }
 
 type onchainTransaction struct {
@@ -257,13 +271,13 @@ func (otx *onchainTransaction) intoInsertable(signatureId int32, accounts []data
 
 		// slog.Debug("insertable instruction", "value", insertableIxs[i])
 
-		for _, event := range ix.events {
+		for eventIndex, event := range ix.events {
 			insertableEvents = append(insertableEvents, insertableEvent{
 				SignatureId: signatureId,
 				IxIndex:     ixIndex,
-				Index:       event.Index,
-				Data:        event.Data.Serialize(),
-				Type:        event.Kind,
+				Index:       int16(eventIndex),
+				Data:        event.Serialize(accounts),
+				Type:        event.Kind(),
 			})
 			// slog.Debug("insertable event", "value", insertableEvents[len(insertableEvents)-1])
 		}

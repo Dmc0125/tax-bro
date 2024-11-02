@@ -169,24 +169,22 @@ func (h *prettyHandler) Handle(ctx context.Context, record slog.Record) error {
 	return nil
 }
 
-func PrintStackTrace(st string) {
+func PrintStackTrace() {
+	st := utils.GetStackTrace()
 	fmt.Printf("\nStacktrace:\n%s", st)
 }
 
 func Log(v ...any) {
-	st := utils.GetStackTrace()
 	log.Print(v...)
-	PrintStackTrace(st)
+	PrintStackTrace()
 }
 
 func Logf(format string, v ...any) {
-	st := utils.GetStackTrace()
 	log.Printf(format, v...)
-	PrintStackTrace(st)
+	PrintStackTrace()
 }
 
 func Logln(v ...any) {
-	st := utils.GetStackTrace()
 	log.Println(v...)
-	PrintStackTrace(st)
+	PrintStackTrace()
 }
