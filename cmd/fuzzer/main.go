@@ -1,0 +1,5 @@
+package fuzzer
+
+func main() {
+
+}

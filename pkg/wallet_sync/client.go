@@ -330,7 +330,7 @@ func newSavedMessage(txs []*savedTransaction, parser *instructionsparser.Parser,
 
 		for _, ix := range tx.Ixs {
 			// parsableIx, parsableInnerIxs := ix.intoParsable()
-			associatedAccounts := parser.Parse(ix)
+			associatedAccounts := parser.Parse(ix, tx.Signature)
 
 			if !isWallet {
 				continue
@@ -423,7 +423,7 @@ func (c *Client) fetchAndParseTransactions(ctx context.Context, req unsyncedAddr
 								otx := fetchOnchainTransaction(ctx, c.rpcClient, signature)
 								if !otx.err {
 									for _, ix := range otx.ixs {
-										associatedAccounts := parser.Parse(ix)
+										associatedAccounts := parser.Parse(ix, otx.signature)
 										if req.IsWallet() {
 											msg.addAssociatedAccounts(associatedAccounts)
 										}

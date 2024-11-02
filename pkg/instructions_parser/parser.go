@@ -142,7 +142,7 @@ func (parser *Parser) appendUniqueAssociatedAccounts(associatedAccounts []*Assoc
 
 // Parses events and instructions
 // Instruction is mutated - events are appended
-func (parser *Parser) Parse(instruction ParsableInstruction) []*AssociatedAccount {
+func (parser *Parser) Parse(instruction ParsableInstruction, signature string) []*AssociatedAccount {
 	associatedAccounts := make([]*AssociatedAccount, 0)
 
 	switch instruction.GetProgramAddress() {
@@ -150,6 +150,8 @@ func (parser *Parser) Parse(instruction ParsableInstruction) []*AssociatedAccoun
 		parser.parseSystemIx(instruction)
 	case token.ProgramID.String():
 		associatedAccounts = parser.parseTokenIx(instruction)
+	case solana.SPLAssociatedTokenAccountProgramID.String():
+		associatedAccounts = parser.parseAssociatedTokenIx(instruction, signature)
 	}
 
 	return parser.appendUniqueAssociatedAccounts(associatedAccounts)
