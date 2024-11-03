@@ -15,7 +15,7 @@ CREATE TABLE wallet (
     FOREIGN KEY (address_id) REFERENCES "address"(id),
     UNIQUE (account_id, address_id),
 
-    label VARCHAR(50) NOT NULL,
+    label VARCHAR(50),
     signatures INTEGER NOT NULL DEFAULT 0,
     associated_accounts INTEGER NOT NULL DEFAULT 0
 );
@@ -30,7 +30,7 @@ CREATE TABLE wallet_to_signature (
     UNIQUE (wallet_id, signature_id)
 );
 
-CREATE TYPE associated_account_type AS ENUM ('token')
+CREATE TYPE associated_account_type AS ENUM ('token');
 
 CREATE TABLE associated_account (
     id SERIAL PRIMARY KEY NOT NULL,
@@ -45,7 +45,7 @@ CREATE TABLE associated_account (
     UNIQUE (wallet_id, address_id)
 );
 
-CREATE TYPE sync_wallet_request_status AS ENUM ('queued', 'processing', 'done');
+CREATE TYPE sync_wallet_request_status AS ENUM ('queued', 'fetching_transactions', 'parsing_events');
 
 CREATE TABLE sync_wallet_request (
     id SERIAL PRIMARY KEY NOT NULL,

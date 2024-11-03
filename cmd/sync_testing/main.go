@@ -5,10 +5,8 @@ import (
 	"database/sql"
 	"errors"
 	"flag"
-	"fmt"
 	"log"
 	"log/slog"
-	"os"
 	"path/filepath"
 	"runtime"
 	"tax-bro/pkg/database"
@@ -48,7 +46,7 @@ func newPostgresContainer(ctx context.Context) postgresContainer {
 		),
 		testcontainers.WithWaitStrategy(
 			wait.ForLog("database system is ready to accept connections").
-				WithOccurrence(2).WithStartupTimeout(5*time.Second)),
+				WithOccurrence(2).WithStartupTimeout(10*time.Second)),
 	)
 	utils.AssertNoErr(err, "unable to start postgres container")
 
@@ -67,19 +65,6 @@ func newPostgresContainer(ctx context.Context) postgresContainer {
 			}
 		},
 	}
-}
-
-func getEnvVar(name string) string {
-	v := os.Getenv(name)
-	if v == "" {
-		err := godotenv.Load()
-		utils.Assert(err == nil, fmt.Sprintf("Unable to load env from .env %s", err))
-		v = os.Getenv(name)
-		if v == "" {
-			log.Fatalf("Env variable \"%s\" missing", name)
-		}
-	}
-	return v
 }
 
 func createUser(db *sqlx.DB, rpcClient *rpc.Client, walletAddress string) (int32, int32, string) {
@@ -142,8 +127,8 @@ func main() {
 	flag.Parse()
 	utils.Assert(logLevel == -4 || logLevel == 0 || logLevel == 4 || logLevel == 8, "invalid log level")
 
-	rpcUrl := getEnvVar("RPC_URL")
-	walletAddress := getEnvVar("WALLET")
+	rpcUrl := utils.GetEnvVar("RPC_URL")
+	walletAddress := utils.GetEnvVar("WALLET")
 
 	logger.NewPrettyLogger(logPath, logLevel)
 
@@ -163,17 +148,26 @@ func main() {
 		wallet := struct {
 			SignaturesCount int32          `db:"signatures"`
 			LastSignature   sql.NullString `db:"last_signature"`
+			Status          sql.NullString
 		}{}
-		err := pg.DB.Get(
-			&wallet,
-			"SELECT wallet.signatures, address.value as last_signature FROM wallet LEFT JOIN address ON address.id = wallet.last_signature_id WHERE wallet.id = $1",
-			walletId,
-		)
+		q := `
+			SELECT
+				wallet.signatures, sync_wallet_request.status, signature.value as last_signature
+			FROM
+				wallet
+			LEFT JOIN
+				signature ON signature.id = wallet.last_signature_id
+			LEFT JOIN
+				sync_wallet_request ON sync_wallet_request.wallet_id = wallet.id
+			WHERE
+				wallet.id = $1
+		`
+		err := pg.DB.Get(&wallet, q, walletId)
 		if errors.Is(err, sql.ErrNoRows) {
 			continue
 		}
 		utils.AssertNoErr(err)
-		if wallet.SignaturesCount >= signaturesCount && wallet.LastSignature.Valid {
+		if wallet.Status.String == "parsing_events" {
 			slog.Info(
 				"all signatures fetched",
 				"wallet.signatures", wallet.SignaturesCount,

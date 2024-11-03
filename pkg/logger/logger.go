@@ -164,7 +164,7 @@ func (h *prettyHandler) Handle(ctx context.Context, record slog.Record) error {
 	}
 
 	msg.WriteString("\n")
-	fmt.Printf(msg.String())
+	h.out.Write([]byte(msg.String()))
 
 	return nil
 }

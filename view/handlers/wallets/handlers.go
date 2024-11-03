@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"tax-bro/pkg/database"
 	"tax-bro/pkg/logger"
 	"tax-bro/view/auth"
 	"tax-bro/view/components"
@@ -100,7 +101,7 @@ func POST(c echo.Context) error {
 	savedAddress := struct{ Id int32 }{}
 	err = tx.Get(&savedAddress, "SELECT id FROM address WHERE value = $1", address)
 	if errors.Is(err, sql.ErrNoRows) {
-		err = tx.Get(&savedAddress, "INSERT INTO address (value) VALUES ($1) RETURNING id", address)
+		err = tx.Get(&savedAddress, database.QueryWithReturn(database.QueryInsertAddress, "id"), address)
 	}
 	if err != nil {
 		logger.Log(err)
@@ -110,7 +111,7 @@ func POST(c echo.Context) error {
 	insertedWallet := struct{ Id int32 }{}
 	err = tx.Get(
 		&insertedWallet,
-		"INSERT INTO wallet (account_id, address_id, label) VALUES ($1, $2, $3) RETURNING id",
+		database.QueryWithReturn(database.QueryInsertWallet, "id"),
 		ac.AccountId,
 		savedAddress.Id,
 		label,
@@ -125,7 +126,7 @@ func POST(c echo.Context) error {
 		return components.GlobalErrorResponse(c, constants.ClientErrInternal, http.StatusInternalServerError)
 	}
 
-	if _, err = tx.Exec("INSERT INTO sync_wallet_request (wallet_id) VALUES ($1)", insertedWallet.Id); err != nil {
+	if _, err = tx.Exec(database.QueryInsertSyncWalletRequest, insertedWallet.Id); err != nil {
 		logger.Log(err)
 		return components.GlobalErrorResponse(c, constants.ClientErrInternal, http.StatusInternalServerError)
 	}
@@ -149,7 +150,7 @@ func DELETE(c echo.Context) error {
 	}
 
 	ac := c.(*auth.AuthenticatedContext)
-	_, err = ac.Db.Exec("DELETE FROM wallet WHERE id = $1", int32(walletId))
+	_, err = ac.Db.Exec(database.QueryDeleteWallet, int32(walletId))
 	if errors.Is(err, sql.ErrNoRows) {
 		return components.GlobalErrorResponse(c, "Wallet does not exist", http.StatusNotFound)
 	}

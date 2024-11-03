@@ -11,13 +11,10 @@ import (
 var associatedTokenProgramAddress = solana.SPLAssociatedTokenAccountProgramID.String()
 
 func (parser *Parser) parseAssociatedTokenIx(ix ParsableInstruction, signature string) (associatedAccounts []*AssociatedAccount) {
-	dataWithDiscriminator := ix.GetData()
-	utils.Assert(len(dataWithDiscriminator) >= 1, errMissingDiscriminator)
-	disc := uint8(dataWithDiscriminator[0])
-	utils.Assert(disc < 3, errInvalidData)
+	data := ix.GetData()
+	isCreate := len(data) == 0 || (data[0] == 0 || data[0] == 1)
 
-	switch disc {
-	case 0:
+	if isCreate {
 		// CREATE | CREATE IDEMPOTENT
 		innerIxs := ix.GetInnerInstructions()
 		innerIxsLen := len(innerIxs)
@@ -52,7 +49,7 @@ func (parser *Parser) parseAssociatedTokenIx(ix ParsableInstruction, signature s
 			Kind:    TokenAssociatedAccount,
 			Address: to,
 		})
-	case 2:
+	} else {
 		// RECOVER NESTED
 		slog.Error("unimplemented associated token instruction (recover nested)", "signature", signature)
 	}

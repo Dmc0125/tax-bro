@@ -226,10 +226,10 @@ type insertableEvent struct {
 }
 
 type insertable struct {
-	transaction       insertableTransaction
-	instructions      []insertableInstruction
-	innerInstructions []insertableInnerInstruction
-	events            []insertableEvent
+	transaction       *insertableTransaction
+	instructions      []*insertableInstruction
+	innerInstructions []*insertableInnerInstruction
+	events            []*insertableEvent
 }
 
 func (otx *onchainTransaction) intoInsertable(signatureId int32, accounts []database.Account) insertable {
@@ -246,7 +246,7 @@ func (otx *onchainTransaction) intoInsertable(signatureId int32, accounts []data
 		}
 	}
 
-	itx := insertableTransaction{
+	itx := &insertableTransaction{
 		SignatureId:           signatureId,
 		AccountsIds:           txAccountsIds,
 		Timestamp:             otx.timestamp,
@@ -259,32 +259,34 @@ func (otx *onchainTransaction) intoInsertable(signatureId int32, accounts []data
 	// slog.Debug("insertable transaction", "value", itx)
 
 	utils.Assert(len(otx.ixs) <= math.MaxInt16, "ixs len overflows")
-	insertableIxs := make([]insertableInstruction, len(otx.ixs))
-	insertableInnerIxs := []insertableInnerInstruction{}
-	insertableEvents := []insertableEvent{}
+	insertableIxs := make([]*insertableInstruction, 0)
+	insertableInnerIxs := []*insertableInnerInstruction{}
+	insertableEvents := []*insertableEvent{}
 
 	for i, ix := range otx.ixs {
 		ixIndex := int16(i)
-		insertableIxs[i].insertableInstructionBase = ix.intoInsertable(accounts)
-		insertableIxs[i].SignatureId = signatureId
-		insertableIxs[i].Index = ixIndex
-
+		insertableIxs = append(insertableIxs, &insertableInstruction{
+			insertableInstructionBase: ix.intoInsertable(accounts),
+			SignatureId:               signatureId,
+			Index:                     ixIndex,
+		})
 		// slog.Debug("insertable instruction", "value", insertableIxs[i])
 
 		for eventIndex, event := range ix.events {
-			insertableEvents = append(insertableEvents, insertableEvent{
+			ev := &insertableEvent{
 				SignatureId: signatureId,
 				IxIndex:     ixIndex,
 				Index:       int16(eventIndex),
 				Data:        event.Serialize(accounts),
 				Type:        event.Kind(),
-			})
+			}
+			insertableEvents = append(insertableEvents, ev)
 			// slog.Debug("insertable event", "value", insertableEvents[len(insertableEvents)-1])
 		}
 
 		for j, innerIx := range ix.innerIxs {
 			utils.Assert(j <= math.MaxInt16, "inner ixs len overflow")
-			insertableInnerIxs = append(insertableInnerIxs, insertableInnerInstruction{
+			insertableInnerIxs = append(insertableInnerIxs, &insertableInnerInstruction{
 				IxIndex: ixIndex,
 				insertableInstruction: insertableInstruction{
 					SignatureId:               signatureId,
@@ -323,10 +325,10 @@ func (msg *onchainMessage) addAssociatedAccounts(associatedAccounts []*instructi
 }
 
 func (msg *onchainMessage) intoInsertable(signatures []database.Signature, accounts []database.Account) (
-	insertableTransactions []insertableTransaction,
-	insertableInstructions []insertableInstruction,
-	insertableInnerInstructions []insertableInnerInstruction,
-	insertableEvents []insertableEvent,
+	insertableTransactions []*insertableTransaction,
+	insertableInstructions []*insertableInstruction,
+	insertableInnerInstructions []*insertableInnerInstruction,
+	insertableEvents []*insertableEvent,
 ) {
 	for _, tx := range msg.txs {
 		signaturesIdx := slices.IndexFunc(signatures, func(signature database.Signature) bool {

@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"tax-bro/pkg/database"
 	"tax-bro/pkg/logger"
 	"tax-bro/view/constants"
 	"tax-bro/view/middlewares"
@@ -203,7 +204,7 @@ func HandleSignInCallback(c echo.Context) error {
 		}
 
 		newAccount := struct{ Id int32 }{}
-		err = tx.Get(&newAccount, "INSERT INTO \"account\" (selected_auth_provider, email) VALUES ($1, $2) RETURNING id", provider, providerData.email)
+		err = tx.Get(&newAccount, database.QueryWithReturn(database.QueryInsertAccount, "id"), provider, providerData.email)
 		if err != nil {
 			logger.Log(err)
 			tx.Rollback()

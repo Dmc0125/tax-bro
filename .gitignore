@@ -3,3 +3,5 @@
 .db_data
 .solana
 tmp
+fuzz-tests
+test-ledger

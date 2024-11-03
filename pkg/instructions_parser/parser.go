@@ -105,9 +105,10 @@ type Parser struct {
 func New(walletAddress string, walletId int32, db *sqlx.DB) *Parser {
 	savedAssociatedAccounts := []*database.AssociatedAccount{}
 	q := `
-		SELECT address.value as address, associated_account.last_signature, associated_account.type
+		SELECT address.value as address, signature.value AS last_signature, associated_account.type
 		FROM associated_account
 		INNER JOIN address ON address.id = associated_account.address_id
+		INNER JOIN signature ON signature.id = associated_account.last_signature_id
 		WHERE associated_account.wallet_id = $1
 	`
 	err := db.Select(&savedAssociatedAccounts, q, walletId)

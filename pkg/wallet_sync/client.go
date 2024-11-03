@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"slices"
 	"strings"
+	"sync"
 	"tax-bro/pkg/database"
 	instructionsparser "tax-bro/pkg/instructions_parser"
 	"tax-bro/pkg/utils"
@@ -19,7 +20,6 @@ import (
 	"github.com/gagliardetto/solana-go/rpc"
 	"github.com/jmoiron/sqlx"
 	"github.com/lib/pq"
-	"golang.org/x/sync/errgroup"
 )
 
 const selectSyncWalletRequestQuery = `
@@ -200,7 +200,7 @@ var fetchTransactionQuery = fmt.Sprintf(
 type savedInstructionBase struct {
 	ProgramAddress string `json:"program_address"`
 	Accounts       []database.Account
-	Data           []byte
+	Data           string
 }
 
 func (ix *savedInstructionBase) GetProgramAddress() string {
@@ -216,7 +216,7 @@ func (ix *savedInstructionBase) GetAccountsAddresses() []string {
 }
 
 func (ix *savedInstructionBase) GetData() []byte {
-	return ix.Data
+	return []byte(ix.Data)
 }
 
 type savedInstruction struct {
@@ -262,15 +262,21 @@ func fetchSavedTransactions(db *sqlx.DB, signatures []string) []*savedTransactio
 	for i := 0; i < len(savedTransactions); i += 1 {
 		tx := &savedTransactions[i]
 
-		txs[i].Signature = tx.Signature
-		txs[i].SignatureId = tx.SignatureId
-		txs[i].Logs = tx.Logs
-		txs[i].Err = tx.Err
-
 		ixs := []*savedInstruction{}
 		err := json.Unmarshal(tx.Ixs, &ixs)
 		utils.AssertNoErr(err)
-		txs[i].Ixs = ixs
+
+		for _, ix := range ixs {
+			ix.Data = ix.Data[2:]
+		}
+
+		txs[i] = &savedTransaction{
+			Signature:   tx.Signature,
+			SignatureId: tx.SignatureId,
+			Logs:        tx.Logs,
+			Err:         tx.Err,
+			Ixs:         ixs,
+		}
 	}
 
 	return txs
@@ -288,11 +294,7 @@ func (c *Client) dedupSavedSignatures(sigsChunk []*rpc.TransactionSignature) ded
 	}
 
 	savedTransactions := fetchSavedTransactions(c.db, signatures)
-
 	slog.Debug("fetched saved transactions", "len", len(savedTransactions))
-	if len(savedTransactions) > 0 {
-		log.Printf("%#v", savedTransactions[0])
-	}
 
 	ds := dedupedSignatures{}
 	for _, s := range sigsChunk {
@@ -504,9 +506,11 @@ func insertTransactionsData(tx *sqlx.Tx, signatures []database.Signature, accoun
 	insertableTransactions, insertableInstructions, insertableInnerInstructions, insertableEvents := msg.intoInsertable(signatures, accounts)
 	utils.Assert(len(insertableTransactions) > 0, "0 insertableTransactions")
 
-	var eg errgroup.Group
+	var wg sync.WaitGroup
+	wg.Add(1)
 
-	eg.TryGo(func() error {
+	go func() {
+		defer wg.Done()
 		q := `
 			INSERT INTO
 				transaction (signature_id, accounts_ids, timestamp, timestamp_granularized, slot, logs, err, fee)
@@ -514,47 +518,53 @@ func insertTransactionsData(tx *sqlx.Tx, signatures []database.Signature, accoun
 				(:signature_id, :accounts_ids, :timestamp, :timestamp_granularized, :slot, :logs, :err, :fee)
 		`
 		_, err := tx.NamedExec(q, insertableTransactions)
-		return err
-	})
+		utils.AssertNoErr(err)
+	}()
+
 	if len(insertableInstructions) > 0 {
-		eg.TryGo(func() error {
-			q := `
-				INSERT INTO
-					instruction (signature_id, index, program_account_id, accounts_ids, data)
-				VALUES
-					(:signature_id, :index, :program_account_id, :accounts_ids, :data)
-			`
-			_, err := tx.NamedExec(q, insertableInstructions)
-			return err
-		})
-	}
-	if len(insertableInnerInstructions) > 0 {
-		eg.TryGo(func() error {
-			q := `
-			INSERT INTO
-				inner_instruction (signature_id, index, ix_index, program_account_id, accounts_ids, data)
-			VALUES
-				(:signature_id, :index, :ix_index, :program_account_id, :accounts_ids, :data)
-		`
-			_, err := tx.NamedExec(q, insertableInnerInstructions)
-			return err
-		})
-	}
-	if len(insertableEvents) > 0 {
-		eg.TryGo(func() error {
-			q := `
-			INSERT INTO
-				instruction_event (signature_id, ix_index, index, type, data)
-			VALUES
-				(:signature_id, :ix_index, :index, :type, :data)
-		`
-			_, err := tx.NamedExec(q, insertableEvents)
-			return err
-		})
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+
+			if len(insertableInstructions) > 0 {
+				q := `
+					INSERT INTO
+						instruction (signature_id, index, program_account_id, accounts_ids, data)
+					VALUES
+						(:signature_id, :index, :program_account_id, :accounts_ids, :data)
+				`
+				_, err := tx.NamedExec(q, insertableInstructions)
+				utils.AssertNoErr(err)
+			}
+
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				if len(insertableInnerInstructions) > 0 {
+					q := `
+							INSERT INTO
+								inner_instruction (signature_id, index, ix_index, program_account_id, accounts_ids, data)
+							VALUES
+								(:signature_id, :index, :ix_index, :program_account_id, :accounts_ids, :data)
+						`
+					_, err := tx.NamedExec(q, insertableInnerInstructions)
+					utils.AssertNoErr(err)
+				}
+				if len(insertableEvents) > 0 {
+					q := `
+						INSERT INTO
+							instruction_event (signature_id, ix_index, index, type, data)
+						VALUES
+							(:signature_id, :ix_index, :index, :type, :data)
+					`
+					_, err := tx.NamedExec(q, insertableEvents)
+					utils.AssertNoErr(err)
+				}
+			}()
+		}()
 	}
 
-	err := eg.Wait()
-	utils.AssertNoErr(err)
+	wg.Wait()
 	slog.Info("inserted transactions data")
 }
 
@@ -594,22 +604,23 @@ func insertUserData(
 		}
 
 		accounts := []database.Account{}
-		q := "SELECT id, value FROM address WHERE value = ANY($1)"
+		q := "SELECT id, value AS address FROM address WHERE value = ANY($1)"
 		err = tx.Select(&accounts, q, addresses)
 		utils.AssertNoErr(err)
 
 		insertableAAs := make([]map[string]interface{}, len(associatedAccounts))
-		for _, aa := range associatedAccounts {
+		for i, aa := range associatedAccounts {
 			idx := slices.IndexFunc(accounts, func(account database.Account) bool {
 				return account.Address == aa.Address
 			})
 			utils.Assert(idx > -1, "unable to find account")
-			insertableAAs = append(insertableAAs, map[string]interface{}{
+			insertableAAs[i] = map[string]interface{}{
 				"address_id": accounts[idx].Id,
 				"wallet_id":  walletId,
-			})
+				"type":       aa.Kind.String(),
+			}
 		}
-		q = "INSERT INTO associated_account (address_id, wallet_id) VALUES (:address_id, :wallet_id) ON CONFLICT (address_id, wallet_id) DO NOTHING"
+		q = "INSERT INTO associated_account (address_id, wallet_id, type) VALUES (:address_id, :wallet_id, :type) ON CONFLICT (address_id, wallet_id) DO NOTHING"
 		res, err := tx.NamedExec(q, insertableAAs)
 		utils.AssertNoErr(err)
 		associatedAccountsCount, err = res.RowsAffected()
@@ -700,6 +711,9 @@ func (c *Client) Run() {
 			utils.AssertNoErr(err)
 			slog.Info("fetched sync wallet request", "wallet_id", request.WalletId, "address", request.Address, "last_signature", request.LastSignature)
 
+			_, err = c.db.Exec("UPDATE sync_wallet_request SET status = 'fetching_transactions' WHERE wallet_id = $1", request.WalletId)
+			utils.AssertNoErr(err)
+
 			interruptChan := make(chan struct{})
 			defer close(interruptChan)
 
@@ -721,10 +735,17 @@ func (c *Client) Run() {
 
 			go c.handleParsedTransactions(&request, msgChan)
 
+			slog.Info("syncing main wallet")
 			c.fetchAndParseTransactions(reqCtx, &request, parser, msgChan)
+
+			slog.Info("syncing associated accounts", "len", len(parser.AssociatedAccounts))
 			for _, associatedAccount := range parser.AssociatedAccounts {
 				c.fetchAndParseTransactions(reqCtx, associatedAccount, parser, msgChan)
 			}
+
+			_, err = c.db.Exec("UPDATE sync_wallet_request SET status = 'parsing_events' WHERE wallet_id = $1", request.WalletId)
+			utils.AssertNoErr(err)
+
 			close(msgChan)
 		}
 	}
