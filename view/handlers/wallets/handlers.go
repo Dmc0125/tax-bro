@@ -44,8 +44,8 @@ type wallet struct {
 }
 
 func (w *wallet) component(includeForm bool) templ.Component {
-	status := cases.Title(language.English).String(w.Status)
-	if w.Status == "" || w.Status == "Done" {
+	status := strings.ReplaceAll(cases.Title(language.English).String(w.Status), "_", " ")
+	if w.Status == "" {
 		status = "Synced"
 	}
 	return walletComponent(int(w.Id), w.Label, w.Address, status, includeForm)

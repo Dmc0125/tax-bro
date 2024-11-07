@@ -3,6 +3,7 @@ package walletsync
 import (
 	"context"
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -216,7 +217,9 @@ func (ix *savedInstructionBase) GetAccountsAddresses() []string {
 }
 
 func (ix *savedInstructionBase) GetData() []byte {
-	return []byte(ix.Data)
+	bytes, err := base64.StdEncoding.DecodeString(ix.Data)
+	utils.AssertNoErr(err)
+	return bytes
 }
 
 type savedInstruction struct {
@@ -265,10 +268,6 @@ func fetchSavedTransactions(db *sqlx.DB, signatures []string) []*savedTransactio
 		ixs := []*savedInstruction{}
 		err := json.Unmarshal(tx.Ixs, &ixs)
 		utils.AssertNoErr(err)
-
-		for _, ix := range ixs {
-			ix.Data = ix.Data[2:]
-		}
 
 		txs[i] = &savedTransaction{
 			Signature:   tx.Signature,
@@ -694,8 +693,10 @@ func (c *Client) handleParsedTransactions(request *syncWalletRequest, msgChan ch
 }
 
 func (c *Client) Run() {
+	slog.Info("starting sync service")
 	ticker := time.NewTimer(10 * time.Second)
 
+fetchLoop:
 	for {
 		<-ticker.C
 		select {
@@ -706,7 +707,7 @@ func (c *Client) Run() {
 			request, err := fetchSyncWalletRequest(c.db)
 			if errors.Is(err, sql.ErrNoRows) {
 				slog.Info("sync wallet queue empty")
-				continue
+				continue fetchLoop
 			}
 			utils.AssertNoErr(err)
 			slog.Info("fetched sync wallet request", "wallet_id", request.WalletId, "address", request.Address, "last_signature", request.LastSignature)
@@ -738,8 +739,9 @@ func (c *Client) Run() {
 			slog.Info("syncing main wallet")
 			c.fetchAndParseTransactions(reqCtx, &request, parser, msgChan)
 
-			slog.Info("syncing associated accounts", "len", len(parser.AssociatedAccounts))
+			slog.Debug("syncing associated accounts", "len", len(parser.AssociatedAccounts))
 			for _, associatedAccount := range parser.AssociatedAccounts {
+				slog.Debug("current account", "address", associatedAccount.Address)
 				c.fetchAndParseTransactions(reqCtx, associatedAccount, parser, msgChan)
 			}
 

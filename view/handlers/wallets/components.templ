@@ -35,7 +35,7 @@ templ loadingSpinnerComponent(c string) {
 
 templ addWalletComponent() {
 	<form
-		class="py-4"
+		class="p-4"
 		id="add_wallet"
 		hx-post="/wallets"
 		hx-target="#wallets"
@@ -94,7 +94,7 @@ templ walletComponent(id int, label, address, status string, includeForm bool) {
 	if includeForm {
 		@addWalletComponent()
 	}
-	<div id={ fmt.Sprintf("wallet_%d", id) } class="w-full p-4 border-secondary bg-white flex flex-col gap-y-4">
+	<div id={ fmt.Sprintf("wallet_%d", id) } class="w-full p-4 border-b border-t border-slate-200 flex flex-col gap-y-4">
 		<header class="flex justify-between">
 			<div class="flex flex-col gap-y-1">
 				<h3 class="heading-3">
@@ -170,7 +170,7 @@ templ walletsListComponent(wallets []templ.Component) {
 templ WalletsView(wallets []templ.Component) {
 	@layouts.Base(true) {
 		<div id="global_err"></div>
-		<div class="w-full px-4">
+		<div class="w-full">
 			@addWalletComponent()
 			<div class="mt-6">
 				<h2 class="heading-2">Wallets</h2>

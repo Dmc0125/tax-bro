@@ -35,22 +35,24 @@ func (base *onchainInstructionBase) GetData() []byte {
 	return base.data
 }
 
-func (base *onchainInstructionBase) decompile(
+func decompileInstruction(
 	compiled solana.CompiledInstruction,
 	txAccounts []string,
-) {
-	base.accounts = make([]string, len(compiled.Accounts))
+) *onchainInstructionBase {
+	decompiled := new(onchainInstructionBase)
+	decompiled.accounts = make([]string, len(compiled.Accounts))
 	for i := 0; i < len(compiled.Accounts); i++ {
 		accountIdx := compiled.Accounts[i]
-		base.accounts[i] = txAccounts[accountIdx]
+		decompiled.accounts[i] = txAccounts[accountIdx]
 	}
-	base.programAddress = txAccounts[compiled.ProgramIDIndex]
-	base.data = compiled.Data
+	decompiled.programAddress = txAccounts[compiled.ProgramIDIndex]
+	decompiled.data = compiled.Data
+	return decompiled
 }
 
 func (base *onchainInstructionBase) intoInsertable(accounts []database.Account) insertableInstructionBase {
 	insertableInstructionBase := insertableInstructionBase{
-		Data:        base.data,
+		Data:        base64.StdEncoding.EncodeToString(base.data),
 		AccountsIds: make(pq.Int32Array, len(base.accounts)),
 	}
 
@@ -172,16 +174,19 @@ func fetchOnchainTransaction(ctx context.Context, rpcClient *rpc.Client, signatu
 	otx.timestampGranularized = otx.timestamp.Truncate(15 * time.Minute)
 
 	for i := 0; i < len(msg.Instructions); i++ {
-		otx.ixs = append(otx.ixs, &onchainInstruction{})
-		otx.ixs[i].decompile(msg.Instructions[i], otx.accounts)
+		ix := &onchainInstruction{
+			onchainInstructionBase: *decompileInstruction(msg.Instructions[i], otx.accounts),
+			innerIxs:               make([]*onchainInstructionBase, 0),
+			events:                 make([]instructionsparser.Event, 0),
+		}
+		otx.ixs = append(otx.ixs, ix)
 	}
 
 	for i := 0; i < len(meta.InnerInstructions); i++ {
 		iix := &meta.InnerInstructions[i]
 		ixIndex := iix.Index
 		for j := 0; j < len(iix.Instructions); j++ {
-			decompiledInnerIx := &onchainInstructionBase{}
-			decompiledInnerIx.decompile(iix.Instructions[j], otx.accounts)
+			decompiledInnerIx := decompileInstruction(iix.Instructions[j], otx.accounts)
 			otx.ixs[ixIndex].innerIxs = append(otx.ixs[ixIndex].innerIxs, decompiledInnerIx)
 		}
 	}
@@ -203,7 +208,7 @@ type insertableTransaction struct {
 type insertableInstructionBase struct {
 	ProgramAccountId int32         `db:"program_account_id"`
 	AccountsIds      pq.Int32Array `db:"accounts_ids"`
-	Data             []byte
+	Data             string
 }
 
 type insertableInstruction struct {
@@ -277,7 +282,7 @@ func (otx *onchainTransaction) intoInsertable(signatureId int32, accounts []data
 				SignatureId: signatureId,
 				IxIndex:     ixIndex,
 				Index:       int16(eventIndex),
-				Data:        event.Serialize(accounts),
+				Data:        []byte(base64.StdEncoding.EncodeToString(event.Serialize(accounts))),
 				Type:        event.Kind(),
 			}
 			insertableEvents = append(insertableEvents, ev)

@@ -12,7 +12,7 @@ var associatedTokenProgramAddress = solana.SPLAssociatedTokenAccountProgramID.St
 
 func (parser *Parser) parseAssociatedTokenIx(ix ParsableInstruction, signature string) (associatedAccounts []*AssociatedAccount) {
 	data := ix.GetData()
-	isCreate := len(data) == 0 || (data[0] == 0 || data[0] == 1)
+	isCreate := len(data) == 0 || data[0] == 0 || data[0] == 1
 
 	if isCreate {
 		// CREATE | CREATE IDEMPOTENT
@@ -24,7 +24,7 @@ func (parser *Parser) parseAssociatedTokenIx(ix ParsableInstruction, signature s
 		}
 
 		accounts := ix.GetAccountsAddresses()
-		utils.Assert(len(accounts) > 3, errNotEnoughAccounts)
+		utils.Assert(len(accounts) >= 3, errNotEnoughAccounts)
 
 		from := accounts[0]
 		to := accounts[1]
@@ -45,10 +45,13 @@ func (parser *Parser) parseAssociatedTokenIx(ix ParsableInstruction, signature s
 			})
 		}
 
-		associatedAccounts = append(associatedAccounts, &AssociatedAccount{
-			Kind:    TokenAssociatedAccount,
-			Address: to,
-		})
+		owner := accounts[2]
+		if owner == parser.walletAddress {
+			associatedAccounts = append(associatedAccounts, &AssociatedAccount{
+				Kind:    TokenAssociatedAccount,
+				Address: to,
+			})
+		}
 	} else {
 		// RECOVER NESTED
 		slog.Error("unimplemented associated token instruction (recover nested)", "signature", signature)

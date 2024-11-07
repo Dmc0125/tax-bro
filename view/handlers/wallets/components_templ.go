@@ -241,7 +241,7 @@ func addWalletComponent() templ.Component {
 			templ_7745c5c3_Var13 = templ.NopComponent
 		}
 		ctx = templ.ClearChildren(ctx)
-		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString("<form class=\"py-4\" id=\"add_wallet\" hx-post=\"/wallets\" hx-target=\"#wallets\" hx-swap=\"afterbegin\" hx-disabled-elt=\"#add_wallet button\" hx-swap-oob=\"true\"><h2 class=\"heading-2\">Add New Wallet</h2><div class=\"flex flex-col gap-y-6 mt-6\">")
+		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString("<form class=\"p-4\" id=\"add_wallet\" hx-post=\"/wallets\" hx-target=\"#wallets\" hx-swap=\"afterbegin\" hx-disabled-elt=\"#add_wallet button\" hx-swap-oob=\"true\"><h2 class=\"heading-2\">Add New Wallet</h2><div class=\"flex flex-col gap-y-6 mt-6\">")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -374,7 +374,7 @@ func walletComponent(id int, label, address, status string, includeForm bool) te
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString("\" class=\"w-full p-4 border-secondary bg-white flex flex-col gap-y-4\"><header class=\"flex justify-between\"><div class=\"flex flex-col gap-y-1\"><h3 class=\"heading-3\">")
+		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString("\" class=\"w-full p-4 border-b border-t border-slate-200 flex flex-col gap-y-4\"><header class=\"flex justify-between\"><div class=\"flex flex-col gap-y-1\"><h3 class=\"heading-3\">")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -576,7 +576,7 @@ func WalletsView(wallets []templ.Component) templ.Component {
 				}()
 			}
 			ctx = templ.InitializeContext(ctx)
-			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString("<div id=\"global_err\"></div><div class=\"w-full px-4\">")
+			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString("<div id=\"global_err\"></div><div class=\"w-full\">")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}

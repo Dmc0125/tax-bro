@@ -45,7 +45,8 @@ CREATE TABLE instruction (
 
     program_account_id INTEGER NOT NULL,
     accounts_ids INTEGER[] NOT NULL,
-    "data" BYTEA NOT NULL,
+    -- base64 encoded bytes because bytea is stupid
+    "data" VARCHAR NOT NULL,
 
     FOREIGN KEY (program_account_id) REFERENCES "address"(id)
 );
@@ -64,7 +65,8 @@ CREATE TABLE inner_instruction (
 
     program_account_id INTEGER NOT NULL,
     accounts_ids INTEGER[] NOT NULL,
-    "data" BYTEA NOT NULL,
+    -- base64 encoded bytes because bytea is stupid
+    "data" VARCHAR NOT NULL,
 
     FOREIGN KEY (program_account_id) REFERENCES "address"(id)
 );
@@ -82,5 +84,6 @@ CREATE TABLE instruction_event (
     PRIMARY KEY (signature_id, ix_index, "index"),
 
     "type" event_type NOT NULL,
-    "data" BYTEA NOT NULL
+    -- base64 encoded bytes
+    "data" VARCHAR NOT NULL
 );
