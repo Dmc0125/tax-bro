@@ -1,8 +1,6 @@
 package instructionsparser
 
 import (
-	"log/slog"
-	"os"
 	"slices"
 	"tax-bro/pkg/database"
 	"tax-bro/pkg/utils"
@@ -10,15 +8,19 @@ import (
 	"github.com/gagliardetto/solana-go"
 	"github.com/gagliardetto/solana-go/programs/system"
 	"github.com/gagliardetto/solana-go/programs/token"
-	"github.com/gagliardetto/solana-go/rpc"
 	"github.com/jmoiron/sqlx"
 )
 
 const (
-	errNotEnoughAccounts    = "not enough accounts"
-	errMissingDiscriminator = "missing discriminator"
-	errInvalidData          = "invalid data"
+	ErrNotEnoughAccounts    = "not enough accounts"
+	ErrMissingDiscriminator = "missing discriminator"
+	ErrInvalidData          = "invalid data"
 )
+
+type Event interface {
+	Kind() string
+	Serialize(database.Accounts) []byte
+}
 
 type ParsableInstructionBase interface {
 	GetProgramAddress() string
@@ -32,73 +34,8 @@ type ParsableInstruction interface {
 	AppendEvents(...Event)
 }
 
-type Event interface {
-	Kind() string
-	Serialize(database.Accounts) []byte
-}
-
-type AssociatedAccountKind uint8
-
-func (kind AssociatedAccountKind) String() string {
-	switch kind {
-	case 0:
-		return "token"
-	}
-	slog.Error("invalid associated account kind", "value", kind)
-	os.Exit(1)
-	return ""
-}
-
-const (
-	TokenAssociatedAccount AssociatedAccountKind = 0
-)
-
-type AssociatedAccount struct {
-	Kind          AssociatedAccountKind
-	Address       string
-	LastSignature string
-}
-
-func newAssociatedAccountFromSaved(saved *database.AssociatedAccount) *AssociatedAccount {
-	var kind AssociatedAccountKind
-	switch saved.Type {
-	case "token":
-		kind = 0
-	default:
-		slog.Error("invalid associated account type", "value", saved.Type)
-		os.Exit(1)
-	}
-
-	return &AssociatedAccount{
-		Kind:          kind,
-		Address:       saved.Address,
-		LastSignature: saved.LastSignature.String,
-	}
-}
-
-func (a *AssociatedAccount) GetFetchSignaturesConfig() (solana.PublicKey, *rpc.GetSignaturesForAddressOpts) {
-	pk, err := solana.PublicKeyFromBase58(a.Address)
-	utils.AssertNoErr(err)
-
-	limit := int(1000)
-	opts := &rpc.GetSignaturesForAddressOpts{
-		Limit:      &limit,
-		Commitment: rpc.CommitmentConfirmed,
-	}
-	if len(a.LastSignature) > 0 {
-		opts.Until, err = solana.SignatureFromBase58(a.LastSignature)
-		utils.AssertNoErr(err)
-	}
-
-	return pk, opts
-}
-
-func (a *AssociatedAccount) IsWallet() bool {
-	return false
-}
-
 type Parser struct {
-	walletAddress      string
+	WalletAddress      string
 	AssociatedAccounts []*AssociatedAccount
 }
 
@@ -115,11 +52,11 @@ func New(walletAddress string, walletId int32, db *sqlx.DB) *Parser {
 	utils.AssertNoErr(err)
 
 	p := &Parser{
-		walletAddress:      walletAddress,
+		WalletAddress:      walletAddress,
 		AssociatedAccounts: make([]*AssociatedAccount, 0),
 	}
 	for _, aa := range savedAssociatedAccounts {
-		p.AssociatedAccounts = append(p.AssociatedAccounts, newAssociatedAccountFromSaved(aa))
+		p.AssociatedAccounts = append(p.AssociatedAccounts, NewAssociatedAccountFromSaved(aa))
 	}
 	return p
 }

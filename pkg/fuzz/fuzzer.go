@@ -1,4 +1,4 @@
-package fuzzer
+package fuzz
 
 import (
 	"context"

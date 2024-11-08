@@ -77,7 +77,7 @@ func (base *onchainInstructionBase) intoInsertable(accounts []database.Account) 
 type onchainInstruction struct {
 	onchainInstructionBase
 	innerIxs []*onchainInstructionBase
-	events   []instructionsparser.Event
+	Events   []instructionsparser.Event
 }
 
 func (oix *onchainInstruction) GetInnerInstructions() []instructionsparser.ParsableInstructionBase {
@@ -90,36 +90,36 @@ func (oix *onchainInstruction) GetInnerInstructions() []instructionsparser.Parsa
 
 func (oix *onchainInstruction) AppendEvents(events ...instructionsparser.Event) {
 	for _, event := range events {
-		oix.events = append(oix.events, event)
+		oix.Events = append(oix.Events, event)
 	}
 }
 
-type onchainTransaction struct {
-	signature             string
-	accounts              []string
-	logs                  []string
-	ixs                   []*onchainInstruction
-	timestamp             time.Time
-	timestampGranularized time.Time
-	slot                  uint64
-	err                   bool
-	fee                   uint64
+type OnchainTransaction struct {
+	Signature             string
+	Accounts              []string
+	Logs                  []string
+	Ixs                   []*onchainInstruction
+	Timestamp             time.Time
+	TimestampGranularized time.Time
+	Slot                  uint64
+	Err                   bool
+	Fee                   uint64
 }
 
-func (otx *onchainTransaction) decompileAccounts(msg *solana.Message, meta *rpc.TransactionMeta) {
+func (otx *OnchainTransaction) decompileAccounts(msg *solana.Message, meta *rpc.TransactionMeta) {
 	for i := 0; i < len(msg.AccountKeys); i++ {
-		otx.accounts = append(otx.accounts, msg.AccountKeys[i].String())
+		otx.Accounts = append(otx.Accounts, msg.AccountKeys[i].String())
 	}
 	for i := 0; i < len(meta.LoadedAddresses.Writable); i++ {
-		otx.accounts = append(otx.accounts, meta.LoadedAddresses.Writable[i].String())
+		otx.Accounts = append(otx.Accounts, meta.LoadedAddresses.Writable[i].String())
 	}
 	for i := 0; i < len(meta.LoadedAddresses.ReadOnly); i++ {
-		otx.accounts = append(otx.accounts, meta.LoadedAddresses.ReadOnly[i].String())
+		otx.Accounts = append(otx.Accounts, meta.LoadedAddresses.ReadOnly[i].String())
 	}
 }
 
-func (otx *onchainTransaction) parseLogs(meta *rpc.TransactionMeta) {
-	otx.logs = []string{}
+func (otx *OnchainTransaction) parseLogs(meta *rpc.TransactionMeta) {
+	otx.Logs = []string{}
 
 	for _, msg := range meta.LogMessages {
 		var prefix string
@@ -143,7 +143,7 @@ func (otx *onchainTransaction) parseLogs(meta *rpc.TransactionMeta) {
 		}
 
 		if parsedLog := hex.EncodeToString(bytes); parsedLog != "" {
-			otx.logs = append(otx.logs, parsedLog)
+			otx.Logs = append(otx.Logs, parsedLog)
 		}
 	}
 }
@@ -154,7 +154,39 @@ var getTransactionOpts = rpc.GetTransactionOpts{
 	Commitment:                     rpc.CommitmentConfirmed,
 }
 
-func fetchOnchainTransaction(ctx context.Context, rpcClient *rpc.Client, signature solana.Signature) *onchainTransaction {
+func DecompileOnchainTransaction(signature string, slot uint64, blockTime time.Time, msg *solana.Message, meta *rpc.TransactionMeta) *OnchainTransaction {
+	otx := new(OnchainTransaction)
+	otx.decompileAccounts(msg, meta)
+	otx.parseLogs(meta)
+
+	otx.Signature = signature
+	otx.Slot = slot
+	otx.Err = meta.Err != nil
+	otx.Timestamp = blockTime
+	otx.TimestampGranularized = otx.Timestamp.Truncate(15 * time.Minute)
+
+	for i := 0; i < len(msg.Instructions); i++ {
+		ix := &onchainInstruction{
+			onchainInstructionBase: *decompileInstruction(msg.Instructions[i], otx.Accounts),
+			innerIxs:               make([]*onchainInstructionBase, 0),
+			Events:                 make([]instructionsparser.Event, 0),
+		}
+		otx.Ixs = append(otx.Ixs, ix)
+	}
+
+	for i := 0; i < len(meta.InnerInstructions); i++ {
+		iix := &meta.InnerInstructions[i]
+		ixIndex := iix.Index
+		for j := 0; j < len(iix.Instructions); j++ {
+			decompiledInnerIx := decompileInstruction(iix.Instructions[j], otx.Accounts)
+			otx.Ixs[ixIndex].innerIxs = append(otx.Ixs[ixIndex].innerIxs, decompiledInnerIx)
+		}
+	}
+
+	return otx
+}
+
+func fetchOnchainTransaction(ctx context.Context, rpcClient *rpc.Client, signature solana.Signature) *OnchainTransaction {
 	txRes, err := CallRpcWithRetries(func() (*rpc.GetTransactionResult, error) {
 		return rpcClient.GetTransaction(ctx, signature, &getTransactionOpts)
 	}, 5)
@@ -165,33 +197,7 @@ func fetchOnchainTransaction(ctx context.Context, rpcClient *rpc.Client, signatu
 	msg := &decodedTx.Message
 	meta := txRes.Meta
 
-	otx := new(onchainTransaction)
-
-	otx.decompileAccounts(msg, meta)
-	otx.parseLogs(meta)
-	otx.signature = signature.String()
-	otx.timestamp = txRes.BlockTime.Time()
-	otx.timestampGranularized = otx.timestamp.Truncate(15 * time.Minute)
-
-	for i := 0; i < len(msg.Instructions); i++ {
-		ix := &onchainInstruction{
-			onchainInstructionBase: *decompileInstruction(msg.Instructions[i], otx.accounts),
-			innerIxs:               make([]*onchainInstructionBase, 0),
-			events:                 make([]instructionsparser.Event, 0),
-		}
-		otx.ixs = append(otx.ixs, ix)
-	}
-
-	for i := 0; i < len(meta.InnerInstructions); i++ {
-		iix := &meta.InnerInstructions[i]
-		ixIndex := iix.Index
-		for j := 0; j < len(iix.Instructions); j++ {
-			decompiledInnerIx := decompileInstruction(iix.Instructions[j], otx.accounts)
-			otx.ixs[ixIndex].innerIxs = append(otx.ixs[ixIndex].innerIxs, decompiledInnerIx)
-		}
-	}
-
-	return otx
+	return DecompileOnchainTransaction(signature.String(), txRes.Slot, txRes.BlockTime.Time(), msg, meta)
 }
 
 type insertableTransaction struct {
@@ -237,12 +243,12 @@ type insertable struct {
 	events            []*insertableEvent
 }
 
-func (otx *onchainTransaction) intoInsertable(signatureId int32, accounts []database.Account) insertable {
-	utils.Assert(otx.slot <= math.MaxInt32, "slot overflow")
-	utils.Assert(otx.fee <= math.MaxInt64, "fee overflow")
+func (otx *OnchainTransaction) intoInsertable(signatureId int32, accounts []database.Account) insertable {
+	utils.Assert(otx.Slot <= math.MaxInt32, "slot overflow")
+	utils.Assert(otx.Fee <= math.MaxInt64, "fee overflow")
 
-	txAccountsIds := make(pq.Int32Array, len(otx.accounts))
-	for i, address := range otx.accounts {
+	txAccountsIds := make(pq.Int32Array, len(otx.Accounts))
+	for i, address := range otx.Accounts {
 		idx := slices.IndexFunc(accounts, func(a database.Account) bool {
 			return a.Address == address
 		})
@@ -254,21 +260,21 @@ func (otx *onchainTransaction) intoInsertable(signatureId int32, accounts []data
 	itx := &insertableTransaction{
 		SignatureId:           signatureId,
 		AccountsIds:           txAccountsIds,
-		Timestamp:             otx.timestamp,
-		TimestampGranularized: otx.timestampGranularized,
-		Slot:                  int64(otx.slot),
-		Logs:                  otx.logs,
-		Err:                   otx.err,
-		Fee:                   int64(otx.fee),
+		Timestamp:             otx.Timestamp,
+		TimestampGranularized: otx.TimestampGranularized,
+		Slot:                  int64(otx.Slot),
+		Logs:                  otx.Logs,
+		Err:                   otx.Err,
+		Fee:                   int64(otx.Fee),
 	}
 	// slog.Debug("insertable transaction", "value", itx)
 
-	utils.Assert(len(otx.ixs) <= math.MaxInt16, "ixs len overflows")
+	utils.Assert(len(otx.Ixs) <= math.MaxInt16, "ixs len overflows")
 	insertableIxs := make([]*insertableInstruction, 0)
 	insertableInnerIxs := []*insertableInnerInstruction{}
 	insertableEvents := []*insertableEvent{}
 
-	for i, ix := range otx.ixs {
+	for i, ix := range otx.Ixs {
 		ixIndex := int16(i)
 		insertableIxs = append(insertableIxs, &insertableInstruction{
 			insertableInstructionBase: ix.intoInsertable(accounts),
@@ -277,7 +283,7 @@ func (otx *onchainTransaction) intoInsertable(signatureId int32, accounts []data
 		})
 		// slog.Debug("insertable instruction", "value", insertableIxs[i])
 
-		for eventIndex, event := range ix.events {
+		for eventIndex, event := range ix.Events {
 			ev := &insertableEvent{
 				SignatureId: signatureId,
 				IxIndex:     ixIndex,
@@ -313,7 +319,7 @@ func (otx *onchainTransaction) intoInsertable(signatureId int32, accounts []data
 }
 
 type onchainMessage struct {
-	txs                []*onchainTransaction
+	txs                []*OnchainTransaction
 	associatedAccounts []*instructionsparser.AssociatedAccount
 	lastSignature      string
 }
@@ -337,7 +343,7 @@ func (msg *onchainMessage) intoInsertable(signatures []database.Signature, accou
 ) {
 	for _, tx := range msg.txs {
 		signaturesIdx := slices.IndexFunc(signatures, func(signature database.Signature) bool {
-			return signature.Value == tx.signature
+			return signature.Value == tx.Signature
 		})
 		utils.Assert(signaturesIdx != -1, "unable to find signature")
 

@@ -4,176 +4,228 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io/fs"
-	"log"
 	"os"
-	"path/filepath"
-	"strings"
-	"sync"
+	"os/exec"
+	"os/signal"
+	"path"
+	"runtime"
+	"slices"
+	"sync/atomic"
+	"syscall"
 	"tax-bro/pkg/utils"
+	walletsync "tax-bro/pkg/wallet_sync"
 	"time"
 
 	"github.com/gagliardetto/solana-go"
+	"github.com/gagliardetto/solana-go/programs/system"
+	"github.com/gagliardetto/solana-go/programs/token"
 	"github.com/gagliardetto/solana-go/rpc"
 )
 
-func SetupSolana() (*rpc.Client, []solana.Wallet) {
-	rpcUrl := os.Getenv("RPC_URL")
-	rpcClient := rpc.New(rpcUrl)
-
-	wallets := []solana.Wallet{}
-	solanaDir := os.Getenv("SOLANA_DIR")
-	err := filepath.Walk(solanaDir, func(path string, info fs.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-		if info.IsDir() {
-			return nil
-		}
-		name := info.Name()
-		if strings.HasPrefix(name, "pk_") && strings.HasSuffix(name, ".json") {
-			pk, err := solana.PrivateKeyFromSolanaKeygenFile(path)
-			if err != nil {
-				return err
-			}
-			wallet := solana.Wallet{
-				PrivateKey: pk,
-			}
-			wallets = append(wallets, wallet)
-		}
-		return nil
-	})
-	utils.Assert(err == nil, fmt.Sprint(err))
-
-	return rpcClient, wallets
+func getProjectDir() string {
+	_, fp, _, ok := runtime.Caller(0)
+	utils.Assert(ok, "unable to get current filename")
+	return path.Join(fp, "../../..")
 }
 
-func ForceSendTx(
-	rpcClient *rpc.Client,
-	wallet *solana.Wallet,
-	ixs []solana.Instruction,
-) {
-	var wg sync.WaitGroup
-	var lock sync.Mutex
-	ctx, cancel := context.WithCancel(context.Background())
-	var signature solana.Signature
+const rpcPort = "6420"
 
-	wg.Add(2)
-	go func() {
-		defer wg.Done()
-		blockhash, err := rpcClient.GetLatestBlockhash(
-			context.Background(),
-			rpc.CommitmentConfirmed,
-		)
-		if err != nil {
-			log.Fatalf("unable to get blockhash: %s", err)
+var RpcUrl = fmt.Sprintf("http://localhost:%s", rpcPort)
+var projectDir = getProjectDir()
+var validatorCmd *exec.Cmd
+var count atomic.Uint32
+var ctrlcListening atomic.Bool
+
+func waitForStart(rpcClient *rpc.Client) {
+	startTime := time.Now().Unix()
+	ticker := time.NewTicker(100 * time.Millisecond)
+
+	for {
+		<-ticker.C
+		if startTime+10 < time.Now().Unix() {
+			fmt.Printf("unable to start solana-test-validator")
+			os.Exit(1)
 		}
-		startTime := time.Now().UnixMilli()
-
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			default:
-				if startTime+int64(90*time.Second*time.Millisecond) > time.Now().UnixMilli() {
-					blockhash, err = rpcClient.GetLatestBlockhash(
-						context.Background(),
-						rpc.CommitmentConfirmed,
-					)
-					if err != nil {
-						log.Fatalf("unable to get blockhash: %s", err)
-					}
-				}
-
-				tx, err := solana.NewTransaction(
-					ixs,
-					blockhash.Value.Blockhash,
-					solana.TransactionPayer(wallet.PublicKey()),
-				)
-				if err != nil {
-					log.Fatalf("unable to create tx: %s", err)
-				}
-				sigs, _ := tx.Sign(func(key solana.PublicKey) *solana.PrivateKey {
-					return &wallet.PrivateKey
-				})
-
-				retries := uint(0)
-				_, err = rpcClient.SendTransactionWithOpts(
-					context.Background(),
-					tx,
-					rpc.TransactionOpts{
-						SkipPreflight: true,
-						MaxRetries:    &retries,
-					},
-				)
-				if err != nil {
-					log.Fatalf("unable to send tx: %s", err)
-				}
-
-				lock.Lock()
-				if signature == (solana.Signature{}) {
-					signature = sigs[0]
-				}
-				lock.Unlock()
-				time.Sleep(2 * time.Second)
-			}
+		_, err := rpcClient.GetVersion(context.Background())
+		if err == nil {
+			return
 		}
-	}()
-
-	go func() {
-		defer wg.Done()
-		ticker := time.NewTicker(1 * time.Second)
-
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				lock.Lock()
-				s := signature
-				lock.Unlock()
-
-				if s == (solana.Signature{}) {
-					continue
-				}
-
-				res, err := rpcClient.GetSignatureStatuses(context.Background(), true, s)
-				if errors.Is(err, rpc.ErrNotFound) {
-					continue
-				}
-				if err != nil {
-					log.Fatalf("unable to get signature status: %s", err)
-				}
-
-				if res.Value[0] == nil {
-					continue
-				}
-
-				status := res.Value[0].ConfirmationStatus
-
-				if status == rpc.ConfirmationStatusConfirmed {
-					cancel()
-					return
-				}
-			}
-		}
-	}()
-
-	wg.Wait()
-}
-
-func ForceSendTxs(
-	rpcClient *rpc.Client,
-	wallet *solana.Wallet,
-	txs [][]solana.Instruction,
-) {
-	var wg sync.WaitGroup
-	for _, ixs := range txs {
-		wg.Add(1)
-		go func() {
-			ForceSendTx(rpcClient, wallet, ixs)
-			wg.Done()
-		}()
 	}
-	wg.Wait()
+}
+
+func initWallet(rpcClient *rpc.Client) *solana.Wallet {
+	wallet := solana.NewWallet()
+
+	err := ExecuteAirdrop(context.Background(), rpcClient, wallet.PublicKey())
+	utils.AssertNoErr(err, "unable to airdrop")
+
+	return wallet
+}
+
+func CleanupSolana() {
+	c := count.Load()
+	if c > 1 {
+		count.Store(c - 1)
+		return
+	}
+
+	if validatorCmd != nil {
+		validatorCmd.Process.Kill()
+		validatorCmd = nil
+		count.Store(0)
+	}
+}
+
+func ctrlC() {
+	if ctrlcListening.Load() {
+		return
+	}
+
+	ctrlcListening.Store(true)
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+
+	<-sigChan
+	count.Store(1)
+	CleanupSolana()
+	os.Exit(1)
+}
+
+func InitSolana() (*solana.Wallet, *rpc.Client) {
+	count.Add(1)
+	if count.Load() > 1 {
+		rpcClient := rpc.New(RpcUrl)
+		waitForStart(rpcClient)
+		wallet := initWallet(rpcClient)
+		return wallet, rpcClient
+	}
+
+	testLedgerPath := path.Join(projectDir, "test-ledger")
+	validatorCmd = exec.Command(
+		"solana-test-validator",
+		"--ledger", testLedgerPath,
+		"--rpc-port", rpcPort,
+		"--reset",
+		"--quiet",
+	)
+	validatorCmd.Stderr = os.Stderr
+
+	err := validatorCmd.Start()
+	utils.AssertNoErr(err)
+
+	go ctrlC()
+
+	rpcClient := rpc.New(RpcUrl)
+	waitForStart(rpcClient)
+	wallet := initWallet(rpcClient)
+
+	return wallet, rpcClient
+}
+
+func ExecuteTx(ctx context.Context, rpcClient *rpc.Client, instructions []solana.Instruction, signers []*solana.Wallet) (string, *walletsync.OnchainTransaction) {
+	blockhash, err := rpcClient.GetRecentBlockhash(ctx, rpc.CommitmentConfirmed)
+	utils.AssertNoErr(err)
+	transaction, err := solana.NewTransaction(
+		instructions,
+		blockhash.Value.Blockhash,
+		solana.TransactionPayer(signers[0].PublicKey()),
+	)
+	utils.AssertNoErr(err)
+
+	transaction.Sign(func(signerAddress solana.PublicKey) *solana.PrivateKey {
+		idx := slices.IndexFunc(signers, func(signer *solana.Wallet) bool {
+			return signer.PublicKey().Equals(signerAddress)
+		})
+		utils.Assert(idx > -1, "unable to find signer")
+		return &signers[idx].PrivateKey
+	})
+
+	sig, err := rpcClient.SendTransactionWithOpts(ctx, transaction, rpc.TransactionOpts{
+		SkipPreflight: true,
+	})
+	utils.AssertNoErr(err, "unable to send transaction")
+
+	v := uint64(0)
+	getTxOpts := &rpc.GetTransactionOpts{
+		Encoding:                       solana.EncodingBase64,
+		Commitment:                     rpc.CommitmentConfirmed,
+		MaxSupportedTransactionVersion: &v,
+	}
+
+	ticker := time.NewTicker(100 * time.Millisecond)
+outer:
+	for {
+		select {
+		case <-ctx.Done():
+			return sig.String(), nil
+		case <-ticker.C:
+			txResult, err := rpcClient.GetTransaction(ctx, sig, getTxOpts)
+			if errors.Is(err, rpc.ErrNotFound) {
+				continue outer
+			}
+			utils.AssertNoErr(err)
+			decodedTx, err := txResult.Transaction.GetTransaction()
+			utils.AssertNoErr(err)
+			msg := &decodedTx.Message
+			meta := txResult.Meta
+			return sig.String(), walletsync.DecompileOnchainTransaction(sig.String(), txResult.Slot, txResult.BlockTime.Time(), msg, meta)
+		}
+	}
+}
+
+func ExecuteAirdrop(ctx context.Context, rpcClient *rpc.Client, account solana.PublicKey) error {
+	sig, err := rpcClient.RequestAirdrop(ctx, account, 1_000_000_000_000, rpc.CommitmentConfirmed)
+	utils.AssertNoErr(err)
+
+	start := time.Now().Unix()
+	ticker := time.NewTicker(100 * time.Millisecond)
+outer:
+	for {
+		if start+10 < time.Now().Unix() {
+			return errors.New("unable to confirm airdrop")
+		}
+
+		select {
+		case <-ctx.Done():
+			return errors.New("canceled")
+		case <-ticker.C:
+			res, err := rpcClient.GetSignatureStatuses(ctx, false, sig)
+			if errors.Is(err, rpc.ErrNotFound) {
+				continue outer
+			}
+			if len(res.Value) == 0 || res.Value[0] == nil {
+				continue outer
+			}
+			s := res.Value[0]
+			if s.ConfirmationStatus == rpc.ConfirmationStatusConfirmed {
+				return nil
+			}
+		}
+	}
+}
+
+func CreateInitMintIxs(rpcClient *rpc.Client, wallet *solana.Wallet) (*solana.Wallet, []solana.Instruction) {
+	space := uint64(82)
+	amount, err := rpcClient.GetMinimumBalanceForRentExemption(context.Background(), space, rpc.CommitmentConfirmed)
+	utils.AssertNoErr(err)
+
+	mint := solana.NewWallet()
+	ixs := []solana.Instruction{
+		system.NewCreateAccountInstruction(amount, space, token.ProgramID, wallet.PublicKey(), mint.PublicKey()).Build(),
+		token.NewInitializeMint2Instruction(0, wallet.PublicKey(), solana.PublicKey{}, mint.PublicKey()).Build(),
+	}
+	return mint, ixs
+}
+
+func CreateInitTokenAccountIxs(rpcClient *rpc.Client, wallet *solana.Wallet, mint solana.PublicKey) (*solana.Wallet, []solana.Instruction) {
+	space := uint64(165)
+	amount, err := rpcClient.GetMinimumBalanceForRentExemption(context.Background(), space, rpc.CommitmentConfirmed)
+	utils.AssertNoErr(err)
+
+	tokenAccount := solana.NewWallet()
+	ixs := []solana.Instruction{
+		system.NewCreateAccountInstruction(amount, space, token.ProgramID, wallet.PublicKey(), tokenAccount.PublicKey()).Build(),
+		token.NewInitializeAccount3Instruction(wallet.PublicKey(), tokenAccount.PublicKey(), mint).Build(),
+	}
+	return tokenAccount, ixs
 }

@@ -410,7 +410,7 @@ func (c *Client) fetchAndParseTransactions(ctx context.Context, req unsyncedAddr
 					if len(dedupedSignatures.unsaved) > 0 {
 						slog.Info("creating onchain message", "txsLen", len(dedupedSignatures.unsaved))
 						msg := &onchainMessage{
-							txs: make([]*onchainTransaction, len(dedupedSignatures.unsaved)),
+							txs: make([]*OnchainTransaction, len(dedupedSignatures.unsaved)),
 						}
 						if isLastIter && isLastChunk && len(newLastSignature) > 0 {
 							msg.lastSignature = newLastSignature
@@ -422,9 +422,9 @@ func (c *Client) fetchAndParseTransactions(ctx context.Context, req unsyncedAddr
 								return
 							default:
 								otx := fetchOnchainTransaction(ctx, c.rpcClient, signature)
-								if !otx.err {
-									for _, ix := range otx.ixs {
-										associatedAccounts := parser.Parse(ix, otx.signature)
+								if !otx.Err {
+									for _, ix := range otx.Ixs {
+										associatedAccounts := parser.Parse(ix, otx.Signature)
 										if req.IsWallet() {
 											msg.addAssociatedAccounts(associatedAccounts)
 										}
@@ -459,8 +459,8 @@ func insertSignaturesAndAccounts(tx *sqlx.Tx, msg *onchainMessage) ([]database.S
 	insertableSignatures := make(pq.StringArray, len(msg.txs))
 	insertableAccounts := make(pq.StringArray, 0)
 	for i, tx := range msg.txs {
-		insertableSignatures[i] = tx.signature
-		for _, account := range tx.accounts {
+		insertableSignatures[i] = tx.Signature
+		for _, account := range tx.Accounts {
 			if !slices.Contains(insertableAccounts, account) {
 				insertableAccounts = append(insertableAccounts, account)
 			}

@@ -24,29 +24,29 @@ func (parser *Parser) parseAssociatedTokenIx(ix ParsableInstruction, signature s
 		}
 
 		accounts := ix.GetAccountsAddresses()
-		utils.Assert(len(accounts) >= 3, errNotEnoughAccounts)
+		utils.Assert(len(accounts) >= 3, ErrNotEnoughAccounts)
 
 		from := accounts[0]
 		to := accounts[1]
 
-		if innerIxsLen == 4 || innerIxsLen == 5 {
+		if innerIxsLen == 4 || innerIxsLen == 6 {
 			// create from zero lamports || create with lamports
 			// rent index = 1
 			createAccountIx := innerIxs[1]
 			data := createAccountIx.GetData()[4:]
-			lamports := binary.BigEndian.Uint64(data)
+			lamports := binary.LittleEndian.Uint64(data)
 
 			ix.AppendEvents(&TransferEventData{
-				from:    from,
-				to:      to,
-				isRent:  true,
-				program: associatedTokenProgramAddress,
-				amount:  lamports,
+				From:    from,
+				To:      to,
+				IsRent:  true,
+				Program: associatedTokenProgramAddress,
+				Amount:  lamports,
 			})
 		}
 
 		owner := accounts[2]
-		if owner == parser.walletAddress {
+		if owner == parser.WalletAddress {
 			associatedAccounts = append(associatedAccounts, &AssociatedAccount{
 				Kind:    TokenAssociatedAccount,
 				Address: to,

@@ -10,10 +10,10 @@ import (
 )
 
 const (
-	eventTransfer     = "transfer"
-	eventMint         = "mint"
-	eventBurn         = "burn"
-	eventCloseAccount = "close_account"
+	EventTransfer     = "transfer"
+	EventMint         = "mint"
+	EventBurn         = "burn"
+	EventCloseAccount = "close_account"
 )
 
 type EventKind int8
@@ -30,32 +30,32 @@ func (ek EventKind) String() string {
 }
 
 type TransferEventData struct {
-	from    string
-	to      string
-	amount  uint64
-	program string
-	isRent  bool
+	From    string
+	To      string
+	Amount  uint64
+	Program string
+	IsRent  bool
 }
 
 func (data *TransferEventData) Kind() string {
-	return eventTransfer
+	return EventTransfer
 }
 
 func (data *TransferEventData) Serialize(accounts database.Accounts) []byte {
-	fromId, err := accounts.FindId(data.from)
+	fromId, err := accounts.FindId(data.From)
 	utils.AssertNoErr(err)
-	toId, err := accounts.FindId(data.to)
+	toId, err := accounts.FindId(data.To)
 	utils.AssertNoErr(err)
-	programId, err := accounts.FindId(data.program)
+	programId, err := accounts.FindId(data.Program)
 	utils.AssertNoErr(err)
 
 	// 4 + 4 + 8 + 4 + 1 = 21
 	serialized := make([]byte, 21)
 	binary.BigEndian.PutUint32(serialized, uint32(fromId))
 	binary.BigEndian.PutUint32(serialized[4:], uint32(toId))
-	binary.BigEndian.PutUint64(serialized[8:], data.amount)
+	binary.BigEndian.PutUint64(serialized[8:], data.Amount)
 	binary.BigEndian.PutUint32(serialized[16:], uint32(programId))
-	if data.isRent {
+	if data.IsRent {
 		serialized[20] = 1
 	}
 
@@ -63,68 +63,68 @@ func (data *TransferEventData) Serialize(accounts database.Accounts) []byte {
 }
 
 type MintEventData struct {
-	to     string
-	amount uint64
-	token  string
+	To     string
+	Amount uint64
+	Token  string
 }
 
 func (data *MintEventData) Kind() string {
-	return eventMint
+	return EventMint
 }
 
 func (data *MintEventData) Serialize(accounts database.Accounts) []byte {
-	toId, err := accounts.FindId(data.to)
+	toId, err := accounts.FindId(data.To)
 	utils.AssertNoErr(err)
-	tokenId, err := accounts.FindId(data.token)
+	tokenId, err := accounts.FindId(data.Token)
 	utils.AssertNoErr(err)
 
 	// 4 + 8 + 4 = 16
 	serialized := make([]byte, 16)
 	binary.BigEndian.PutUint32(serialized, uint32(toId))
-	binary.BigEndian.PutUint64(serialized[4:], uint64(data.amount))
+	binary.BigEndian.PutUint64(serialized[4:], uint64(data.Amount))
 	binary.BigEndian.PutUint32(serialized[12:], uint32(tokenId))
 
 	return serialized
 }
 
 type BurnEventData struct {
-	from   string
-	amount uint64
-	token  string
+	From   string
+	Amount uint64
+	Token  string
 }
 
 func (data *BurnEventData) Kind() string {
-	return eventBurn
+	return EventBurn
 }
 
 func (data *BurnEventData) Serialize(accounts database.Accounts) []byte {
-	fromId, err := accounts.FindId(data.from)
+	fromId, err := accounts.FindId(data.From)
 	utils.AssertNoErr(err)
-	tokenId, err := accounts.FindId(data.token)
+	tokenId, err := accounts.FindId(data.Token)
 	utils.AssertNoErr(err)
 
 	// 4 + 8 + 4 = 16
 	serialized := make([]byte, 16)
 	binary.BigEndian.PutUint32(serialized, uint32(fromId))
-	binary.BigEndian.PutUint64(serialized[4:], uint64(data.amount))
+	binary.BigEndian.PutUint64(serialized[4:], uint64(data.Amount))
 	binary.BigEndian.PutUint32(serialized[12:], uint32(tokenId))
 
 	return serialized
 }
 
 type CloseAccountEventData struct {
-	account string
-	to      string
+	Account string
+	To      string
 }
 
 func (data *CloseAccountEventData) Kind() string {
-	return eventCloseAccount
+	return EventCloseAccount
 }
 
 func (data *CloseAccountEventData) Serialize(accounts database.Accounts) []byte {
-	accountId, err := accounts.FindId(data.account)
+	accountId, err := accounts.FindId(data.Account)
 	utils.AssertNoErr(err)
-	toId, err := accounts.FindId(data.to)
+	toId, err := accounts.FindId(data.To)
 	utils.AssertNoErr(err)
 
 	// 4 + 4 = 8
