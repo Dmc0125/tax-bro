@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -17,8 +18,6 @@ import (
 	"time"
 
 	"github.com/gagliardetto/solana-go"
-	"github.com/gagliardetto/solana-go/programs/system"
-	"github.com/gagliardetto/solana-go/programs/token"
 	"github.com/gagliardetto/solana-go/rpc"
 )
 
@@ -28,13 +27,13 @@ func getProjectDir() string {
 	return path.Join(fp, "../../..")
 }
 
-const rpcPort = "6420"
+var TestingRpcPort = uint16(6420)
+var TestingRpcPortStr = fmt.Sprintf("%d", TestingRpcPort)
+var TestingRpcUrl = fmt.Sprintf("http://localhost:%s", TestingRpcPortStr)
 
-var RpcUrl = fmt.Sprintf("http://localhost:%s", rpcPort)
-var projectDir = getProjectDir()
 var validatorCmd *exec.Cmd
 var count atomic.Uint32
-var ctrlcListening atomic.Bool
+var ctrlcRegistered atomic.Bool
 
 func waitForStart(rpcClient *rpc.Client) {
 	startTime := time.Now().Unix()
@@ -76,12 +75,12 @@ func CleanupSolana() {
 	}
 }
 
-func ctrlC() {
-	if ctrlcListening.Load() {
+func RegisterCtrlC() {
+	if ctrlcRegistered.Load() {
 		return
 	}
 
-	ctrlcListening.Store(true)
+	ctrlcRegistered.Store(true)
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
@@ -91,32 +90,42 @@ func ctrlC() {
 	os.Exit(1)
 }
 
+func StartSolanaValidator(dir string, rpcPort string) *exec.Cmd {
+	testLedgerPath := path.Join(dir, "test-ledger")
+	cmd := exec.Command(
+		"solana-test-validator",
+		"--ledger", testLedgerPath,
+		"--rpc-port", rpcPort,
+		"--faucet-sol", fmt.Sprintf("%d", uint64(math.MaxUint64)),
+		"--reset",
+		"--quiet",
+	)
+	cmd.Stderr = os.Stderr
+
+	err := cmd.Start()
+	utils.AssertNoErr(err)
+
+	rpcClient := rpc.New(TestingRpcUrl)
+	waitForStart(rpcClient)
+
+	return cmd
+}
+
 func InitSolana() (*solana.Wallet, *rpc.Client) {
 	count.Add(1)
 	if count.Load() > 1 {
-		rpcClient := rpc.New(RpcUrl)
+		rpcClient := rpc.New(TestingRpcUrl)
 		waitForStart(rpcClient)
 		wallet := initWallet(rpcClient)
 		return wallet, rpcClient
 	}
 
-	testLedgerPath := path.Join(projectDir, "test-ledger")
-	validatorCmd = exec.Command(
-		"solana-test-validator",
-		"--ledger", testLedgerPath,
-		"--rpc-port", rpcPort,
-		"--reset",
-		"--quiet",
-	)
-	validatorCmd.Stderr = os.Stderr
+	projectDir := getProjectDir()
+	validatorCmd = StartSolanaValidator(projectDir, TestingRpcPortStr)
 
-	err := validatorCmd.Start()
-	utils.AssertNoErr(err)
+	go RegisterCtrlC()
 
-	go ctrlC()
-
-	rpcClient := rpc.New(RpcUrl)
-	waitForStart(rpcClient)
+	rpcClient := rpc.New(TestingRpcUrl)
 	wallet := initWallet(rpcClient)
 
 	return wallet, rpcClient
@@ -174,7 +183,7 @@ outer:
 }
 
 func ExecuteAirdrop(ctx context.Context, rpcClient *rpc.Client, account solana.PublicKey) error {
-	sig, err := rpcClient.RequestAirdrop(ctx, account, 1_000_000_000_000, rpc.CommitmentConfirmed)
+	sig, err := rpcClient.RequestAirdrop(ctx, account, 1_000_000_000_000_000, rpc.CommitmentConfirmed)
 	utils.AssertNoErr(err)
 
 	start := time.Now().Unix()
@@ -202,30 +211,4 @@ outer:
 			}
 		}
 	}
-}
-
-func CreateInitMintIxs(rpcClient *rpc.Client, wallet *solana.Wallet) (*solana.Wallet, []solana.Instruction) {
-	space := uint64(82)
-	amount, err := rpcClient.GetMinimumBalanceForRentExemption(context.Background(), space, rpc.CommitmentConfirmed)
-	utils.AssertNoErr(err)
-
-	mint := solana.NewWallet()
-	ixs := []solana.Instruction{
-		system.NewCreateAccountInstruction(amount, space, token.ProgramID, wallet.PublicKey(), mint.PublicKey()).Build(),
-		token.NewInitializeMint2Instruction(0, wallet.PublicKey(), solana.PublicKey{}, mint.PublicKey()).Build(),
-	}
-	return mint, ixs
-}
-
-func CreateInitTokenAccountIxs(rpcClient *rpc.Client, wallet *solana.Wallet, mint solana.PublicKey) (*solana.Wallet, []solana.Instruction) {
-	space := uint64(165)
-	amount, err := rpcClient.GetMinimumBalanceForRentExemption(context.Background(), space, rpc.CommitmentConfirmed)
-	utils.AssertNoErr(err)
-
-	tokenAccount := solana.NewWallet()
-	ixs := []solana.Instruction{
-		system.NewCreateAccountInstruction(amount, space, token.ProgramID, wallet.PublicKey(), tokenAccount.PublicKey()).Build(),
-		token.NewInitializeAccount3Instruction(wallet.PublicKey(), tokenAccount.PublicKey(), mint).Build(),
-	}
-	return tokenAccount, ixs
 }

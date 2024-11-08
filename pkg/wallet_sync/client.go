@@ -694,16 +694,15 @@ func (c *Client) handleParsedTransactions(request *syncWalletRequest, msgChan ch
 
 func (c *Client) Run() {
 	slog.Info("starting sync service")
-	ticker := time.NewTimer(10 * time.Second)
+	ticker := time.NewTicker(10 * time.Second)
 
 fetchLoop:
 	for {
-		<-ticker.C
 		select {
 		case <-c.ctx.Done():
 			slog.Info("context done, exiting client.Run")
 			return
-		default:
+		case <-ticker.C:
 			request, err := fetchSyncWalletRequest(c.db)
 			if errors.Is(err, sql.ErrNoRows) {
 				slog.Info("sync wallet queue empty")

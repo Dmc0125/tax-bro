@@ -4,8 +4,7 @@ import (
 	"context"
 	"log"
 	"path/filepath"
-	"runtime"
-	"testing"
+	"tax-bro/pkg/utils"
 	"time"
 
 	"github.com/jmoiron/sqlx"
@@ -14,51 +13,41 @@ import (
 	"github.com/testcontainers/testcontainers-go/wait"
 )
 
-func SetupDb(t *testing.T) *sqlx.DB {
-	var (
-		dbName      = "db"
-		dbPassword  = "pwd"
-		dbUser      = "user"
-		_, fp, _, _ = runtime.Caller(0)
-	)
+type PostgresContainer struct {
+	*sqlx.DB
+	dbUrl   string
+	cleanup func()
+}
 
-	ctx := context.Background()
-	pgContainer, err := postgres.Run(
+func NewPostgresContainer(ctx context.Context, migrationsDir string) PostgresContainer {
+	postgres, err := postgres.Run(
 		ctx,
 		"docker.io/postgres:16-alpine",
-		postgres.WithDatabase(dbName),
-		postgres.WithUsername(dbUser),
-		postgres.WithPassword(dbPassword),
 		postgres.WithInitScripts(
-			filepath.Join(fp, "../../../db_migrations/00_setup.up.sql"),
-			filepath.Join(fp, "../../../db_migrations/01_user.up.sql"),
-			filepath.Join(fp, "../../../db_migrations/02_txs.up.sql"),
-			filepath.Join(fp, "../../../db_migrations/03_user_txs.up.sql"),
+			filepath.Join(migrationsDir, "/00_setup.up.sql"),
+			filepath.Join(migrationsDir, "/01_user.up.sql"),
+			filepath.Join(migrationsDir, "/02_txs.up.sql"),
+			filepath.Join(migrationsDir, "/03_user_txs.up.sql"),
 		),
 		testcontainers.WithWaitStrategy(
 			wait.ForLog("database system is ready to accept connections").
-				WithOccurrence(2).WithStartupTimeout(5*time.Second)),
+				WithOccurrence(2).WithStartupTimeout(10*time.Second)),
 	)
-	if err != nil {
-		log.Fatal(err)
-	}
+	utils.AssertNoErr(err, "unable to start postgres container")
 
-	dbUrl, err := pgContainer.ConnectionString(ctx, "sslmode=disable")
-	if err != nil {
-		log.Fatal(err)
-	}
-
+	dbUrl, err := postgres.ConnectionString(context.Background(), "sslmode=disable")
+	utils.AssertNoErr(err)
 	db, err := sqlx.Open("postgres", dbUrl)
-	if err != nil {
-		log.Fatal(err)
+	utils.AssertNoErr(err, "unable to open postgres connection")
+
+	return PostgresContainer{
+		dbUrl: dbUrl,
+		DB:    db,
+		cleanup: func() {
+			db.Close()
+			if err := testcontainers.TerminateContainer(postgres); err != nil {
+				log.Printf("unable to gracefully terminate postgres container: %s", err)
+			}
+		},
 	}
-
-	t.Cleanup(func() {
-		db.Close()
-		if err := pgContainer.Terminate(ctx); err != nil {
-			log.Fatalf("failed to terminate pg container: %s", err)
-		}
-	})
-
-	return db
 }
