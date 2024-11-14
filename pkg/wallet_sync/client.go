@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log"
 	"log/slog"
+	"maps"
 	"slices"
 	"strings"
 	"sync"
@@ -311,6 +312,8 @@ func (c *Client) dedupSavedSignatures(sigsChunk []*rpc.TransactionSignature) ded
 }
 
 type savedMessage struct {
+	associatedAccountAddress string
+
 	signaturesIds      []int32
 	associatedAccounts []*instructionsparser.AssociatedAccount
 	lastSignature      string
@@ -356,7 +359,12 @@ type unsyncedAddress interface {
 	IsWallet() bool
 }
 
-func (c *Client) fetchAndParseTransactions(ctx context.Context, req unsyncedAddress, parser *instructionsparser.Parser, msgChan chan interface{}) {
+func (c *Client) fetchAndParseTransactions(
+	ctx context.Context,
+	req unsyncedAddress,
+	parser *instructionsparser.Parser,
+	msgChan chan interface{},
+) {
 	pubkey, getSignaturesOpts := req.GetFetchSignaturesConfig()
 	newLastSignature := ""
 
@@ -567,94 +575,119 @@ func insertTransactionsData(tx *sqlx.Tx, signatures []database.Signature, accoun
 	slog.Info("inserted transactions data")
 }
 
-func insertUserData(
+type walletToSignature struct {
+	WalletId    int32 `db:"wallet_id"`
+	SignatureId int32 `db:"signature_id"`
+}
+
+func insertWalletData(
 	db *sqlx.DB,
 	walletId int32,
+	associatedAccountAddress string,
 	signaturesIds []int32,
 	associatedAccounts []*instructionsparser.AssociatedAccount,
 	lastSignature string,
-) {
-	slog.Info("inserting user data", "signaturesIdsCount", len(signaturesIds), "associatedAccountsCount", len(associatedAccounts), "lastSignature", lastSignature)
+) error {
+	utils.Assert(
+		(associatedAccountAddress != "" && len(associatedAccounts) == 0) || associatedAccountAddress == "",
+		"associated account must not have associated accounts",
+	)
+	utils.Assert(
+		len(signaturesIds) > 0 || len(associatedAccounts) > 0 || lastSignature != "",
+		"unable to insert account data, msg is empty",
+	)
+
 	tx, err := db.Beginx()
 	utils.AssertNoErr(err)
+	defer tx.Rollback()
 
 	signaturesCount := int64(0)
 	associatedAccountsCount := int64(0)
 
 	if len(signaturesIds) > 0 {
-		insertableSignatures := []map[string]interface{}{}
-		for _, signatureId := range signaturesIds {
-			insertableSignatures = append(insertableSignatures, map[string]interface{}{
-				"wallet_id":    walletId,
-				"signature_id": signatureId,
-			})
+		insertable := make([]walletToSignature, len(signaturesIds))
+		for i, signatureId := range signaturesIds {
+			insertable[i] = walletToSignature{WalletId: walletId, SignatureId: signatureId}
 		}
-		q := "INSERT INTO wallet_to_signature (wallet_id, signature_id) VALUES (:wallet_id, :signature_id) ON CONFLICT (wallet_id, signature_id) DO NOTHING"
-		res, err := tx.NamedExec(q, insertableSignatures)
-		utils.AssertNoErr(err)
-		signaturesCount, err = res.RowsAffected()
-		utils.AssertNoErr(err)
+		q := "INSERT INTO wallet_to_signature (wallet_id, signature_id) VALUES (:wallet_id, :signature_id)"
+		res, err := tx.NamedExec(q, insertable)
+		if err != nil {
+			return err
+		}
+		if signaturesCount, err = res.RowsAffected(); err != nil {
+			return err
+		}
 	}
 
 	if len(associatedAccounts) > 0 {
-		addresses := pq.StringArray{}
-		for _, aa := range associatedAccounts {
-			addresses = append(addresses, aa.Address)
+		addresses := make([]string, len(associatedAccounts))
+		for i, associatedAccount := range associatedAccounts {
+			addresses[i] = associatedAccount.Address
 		}
 
-		accounts := []database.Account{}
-		q := "SELECT id, value AS address FROM address WHERE value = ANY($1)"
-		err = tx.Select(&accounts, q, addresses)
-		utils.AssertNoErr(err)
+		addressesIds := []*database.Account{}
+		q := "SELECT value AS address, id FROM address WHERE id = ANY($1)"
+		if err = tx.Select(&addressesIds, q, addresses); err != nil {
+			return err
+		}
 
-		insertableAAs := make([]map[string]interface{}, len(associatedAccounts))
-		for i, aa := range associatedAccounts {
-			idx := slices.IndexFunc(accounts, func(account database.Account) bool {
-				return account.Address == aa.Address
+		insertableAssociatedAccounts := make([]map[string]int32, len(associatedAccounts))
+		for i, associatedAccount := range associatedAccounts {
+			addressIdx := slices.IndexFunc(addressesIds, func(a *database.Account) bool {
+				return a.Address == associatedAccount.Address
 			})
-			utils.Assert(idx > -1, "unable to find account")
-			insertableAAs[i] = map[string]interface{}{
-				"address_id": accounts[idx].Id,
+			utils.Assert(addressIdx > -1, "unable to find associated account address")
+			insertableAssociatedAccounts[i] = map[string]int32{
 				"wallet_id":  walletId,
-				"type":       aa.Kind.String(),
+				"address_id": addressesIds[addressIdx].Id,
 			}
 		}
-		q = "INSERT INTO associated_account (address_id, wallet_id, type) VALUES (:address_id, :wallet_id, :type) ON CONFLICT (address_id, wallet_id) DO NOTHING"
-		res, err := tx.NamedExec(q, insertableAAs)
-		utils.AssertNoErr(err)
-		associatedAccountsCount, err = res.RowsAffected()
-		utils.AssertNoErr(err)
+		q = "INSERT INTO associated_account (wallet_id, address_id) VALUES (:wallet_id, :address_id)"
+		res, err := tx.NamedExec(q, insertableAssociatedAccounts)
+		if err != nil {
+			return err
+		}
+		if associatedAccountsCount, err = res.RowsAffected(); err != nil {
+			return err
+		}
 	}
 
-	if associatedAccountsCount == 0 && signaturesCount == 0 && lastSignature == "" {
-		err = tx.Commit()
-		utils.AssertNoErr(err)
-		return
+	if associatedAccountAddress == "" {
+		q := strings.Builder{}
+		q.WriteString("UPDATE wallet SET ")
+		args := []interface{}{}
+		if signaturesCount > 0 {
+			q.WriteString(fmt.Sprintf("signatures = signatures + $%d ", len(args)+1))
+			args = append(args, signaturesCount)
+		}
+		if associatedAccountsCount > 0 {
+			q.WriteString(fmt.Sprintf(",associated_accounts = associated_accounts + $%d ", len(args)+1))
+			args = append(args, associatedAccountsCount)
+		}
+		if lastSignature != "" {
+			q.WriteString(fmt.Sprintf(",last_signature = $%d ", len(args)+1))
+			args = append(args, lastSignature)
+		}
+		q.WriteString(fmt.Sprintf("WHERE wallet_id = $%d", len(args)+1))
+		args = append(args, walletId)
+		if _, err = tx.Exec(q.String(), args...); err != nil {
+			return err
+		}
+	} else if associatedAccountAddress != "" && lastSignature != "" {
+		q := `
+			UPDATE associated_account
+			SET last_signature = $1
+			WHERE wallet_id = $2 AND address_id = (
+				SELECT address.id FROM address WHERE address.value = $3
+			)
+		`
+		if _, err = tx.Exec(q, lastSignature, walletId, associatedAccountAddress); err != nil {
+			return err
+		}
 	}
-
-	queryBuilder := strings.Builder{}
-	queryBuilder.WriteString("UPDATE wallet SET signatures = signatures + $1, associated_accounts = associated_accounts + $2")
-	args := []interface{}{signaturesCount, associatedAccountsCount}
-	argsCount := 3
-
-	if lastSignature != "" {
-		queryBuilder.WriteString(", last_signature_id = (SELECT signature.id FROM signature WHERE signature.value = $3)")
-		args = append(args, lastSignature)
-		argsCount += 1
-	}
-
-	queryBuilder.WriteString(fmt.Sprintf(" WHERE id = $%d", argsCount))
-	args = append(args, walletId)
-
-	q := queryBuilder.String()
-	slog.Debug("updating wallet", "query", q)
-
-	_, err = tx.Exec(q, args...)
-	utils.AssertNoErr(err)
 
 	err = tx.Commit()
-	utils.AssertNoErr(err)
-	slog.Info("user data inserted")
+	return err
 }
 
 func (c *Client) handleParsedTransactions(request *syncWalletRequest, msgChan chan interface{}) {
@@ -667,7 +700,7 @@ func (c *Client) handleParsedTransactions(request *syncWalletRequest, msgChan ch
 		switch msg := msgUnknown.(type) {
 		case *savedMessage:
 			slog.Info("received saved msg")
-			insertUserData(c.db, request.WalletId, msg.signaturesIds, msg.associatedAccounts, msg.lastSignature)
+			insertWalletData(c.db, request.WalletId, msg.associatedAccountAddress, msg.signaturesIds, msg.associatedAccounts, msg.lastSignature)
 		case *onchainMessage:
 			slog.Info("received onchain msg")
 			tx, err := c.db.Beginx()
@@ -684,12 +717,80 @@ func (c *Client) handleParsedTransactions(request *syncWalletRequest, msgChan ch
 			for i, signature := range signatures {
 				signaturesIds[i] = signature.Id
 			}
-			insertUserData(c.db, request.WalletId, signaturesIds, msg.associatedAccounts, msg.lastSignature)
+			insertWalletData(c.db, request.WalletId, msg.associatedAccountAddress, signaturesIds, msg.associatedAccounts, msg.lastSignature)
 		default:
 			st := utils.GetStackTrace()
 			log.Fatalf("invalid msg in channel\n%s", st)
 		}
 	}
+}
+
+func (c *Client) deduplicateTransactions() {
+	type signatureWithSlot struct {
+		Slot        int64
+		SignatureId int32 `db:"signature_id"`
+		Signature   string
+	}
+	txs := []*signatureWithSlot{}
+	q := `
+		SELECT
+			t1.slot,
+			t1.signature_id,
+			signature.value AS signature
+		FROM
+			transaction t1
+		INNER JOIN
+			signature ON signature.id = transaction.signature_id
+		WHERE EXISTS(
+			SELECT
+				1
+			FROM
+				transaction t2
+			WHERE
+				t1.id != t2.id AND t1.timestamp = t2.timestamp AND t1.slot = t2.slot AND t1.block_index IS NULL AND t2.block_index IS NULL
+		)
+	`
+	err := c.db.Select(&txs, q)
+	utils.AssertNoErr(err)
+	if len(txs) == 0 {
+		return
+	}
+
+	slots := make(map[int64]bool)
+	for _, tx := range txs {
+		slots[tx.Slot] = true
+	}
+
+	type txWithBlockIndex struct {
+		SignatureId int32 `db:"signature_id"`
+		BlockIndex  int32 `db:"block_index"`
+	}
+	txsWithBlockIndexes := []*txWithBlockIndex{}
+	for slot := range maps.Keys(slots) {
+		blockRes, err := CallRpcWithRetries(func() (*rpc.GetBlockResult, error) {
+			return c.rpcClient.GetBlock(c.ctx, uint64(slot))
+		}, 5)
+		utils.AssertNoErr(err)
+		for blockIndex, signature := range blockRes.Signatures {
+			idx := slices.IndexFunc(txs, func(tx *signatureWithSlot) bool {
+				return tx.Signature == signature.String()
+			})
+			if idx != -1 {
+				txsWithBlockIndexes = append(txsWithBlockIndexes, &txWithBlockIndex{
+					SignatureId: txs[idx].SignatureId,
+					BlockIndex:  int32(blockIndex),
+				})
+			}
+		}
+	}
+
+	q = `
+		UPDATE transaction SET transaction.block_index = v.bi FROM (
+			VALUES (:signature_id, :block_index)
+		) AS v(sid, bi) WHERE transaction.signature_id = v.sid
+	`
+	_, err = c.db.NamedExec(q, txsWithBlockIndexes)
+	utils.AssertNoErr(err)
 }
 
 func (c *Client) Run() {
@@ -748,6 +849,8 @@ fetchLoop:
 			utils.AssertNoErr(err)
 
 			close(msgChan)
+
+			c.deduplicateTransactions()
 		}
 	}
 }

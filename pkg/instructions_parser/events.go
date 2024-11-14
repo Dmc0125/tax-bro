@@ -30,11 +30,16 @@ func (ek EventKind) String() string {
 }
 
 type TransferEventData struct {
-	From    string
-	To      string
-	Amount  uint64
+	// 4
+	From string
+	// 4
+	To string
+	// 8
+	Amount uint64
+	// 4
 	Program string
-	IsRent  bool
+	// 1
+	IsRent bool
 }
 
 func (data *TransferEventData) Kind() string {

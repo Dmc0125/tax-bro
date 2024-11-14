@@ -1,7 +1,7 @@
 package constants
 
 import (
-	"tax-bro/view/utils"
+	"tax-bro/pkg/utils"
 )
 
 var BASE_URL = utils.GetEnvVar("BASE_URL")

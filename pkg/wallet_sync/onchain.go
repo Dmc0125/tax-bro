@@ -319,6 +319,8 @@ func (otx *OnchainTransaction) intoInsertable(signatureId int32, accounts []data
 }
 
 type onchainMessage struct {
+	associatedAccountAddress string
+
 	txs                []*OnchainTransaction
 	associatedAccounts []*instructionsparser.AssociatedAccount
 	lastSignature      string

@@ -167,14 +167,24 @@ templ walletsListComponent(wallets []templ.Component) {
 	</div>
 }
 
+templ emptyWalletListComponent() {
+	<p class="mt-4 px-4" id="wallets">
+		You have not added any wallets yet
+	</p>
+}
+
 templ WalletsView(wallets []templ.Component) {
 	@layouts.Base(true) {
 		<div id="global_err"></div>
 		<div class="w-full">
 			@addWalletComponent()
 			<div class="mt-6">
-				<h2 class="heading-2">Wallets</h2>
-				@walletsListComponent(wallets)
+				<h2 class="heading-2 px-4">Wallets</h2>
+				if len(wallets) == 0 {
+					@emptyWalletListComponent()
+				} else {
+					@walletsListComponent(wallets)
+				}
 			</div>
 		</div>
 	}

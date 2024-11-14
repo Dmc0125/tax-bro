@@ -7,8 +7,8 @@ import (
 	"net/http"
 	"sync"
 	"tax-bro/pkg/logger"
+	"tax-bro/pkg/utils"
 	"tax-bro/view/constants"
-	"tax-bro/view/utils"
 
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/github"
