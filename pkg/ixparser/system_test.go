@@ -1,22 +1,22 @@
-package instructionsparser_test
+package ixparser_test
 
 import (
 	"context"
-	instructionsparser "tax-bro/pkg/instructions_parser"
+	"tax-bro/pkg/ixparser"
 	testutils "tax-bro/pkg/test_utils"
 	"tax-bro/pkg/utils"
+	"tax-bro/pkg/walletfetcher"
 	"testing"
 
 	"github.com/gagliardetto/solana-go"
 	"github.com/gagliardetto/solana-go/programs/system"
-	"github.com/test-go/testify/require"
+	"github.com/stretchr/testify/require"
 )
 
 func TestSystemCreateAccount(t *testing.T) {
 	t.Parallel()
 
-	wallet, rpcClient := testutils.InitSolana()
-	defer testutils.CleanupSolana()
+	rpcClient, wallet := testutils.InitSolana()
 
 	receiver := solana.NewWallet()
 	amount := uint64(1_000_000_000)
@@ -28,38 +28,35 @@ func TestSystemCreateAccount(t *testing.T) {
 		wallet.PublicKey(),
 		receiver.PublicKey(),
 	).Build()
-	signature, tx := testutils.ExecuteTx(context.Background(), rpcClient, []solana.Instruction{ix}, []*solana.Wallet{wallet, receiver})
+	txResult := testutils.ExecuteTx(context.Background(), rpcClient, []solana.Instruction{ix}, []*solana.Wallet{wallet, receiver})
+	tx := walletfetcher.DecompileOnchainTransaction(
+		txResult.Signature,
+		txResult.Slot,
+		txResult.BlockTime,
+		txResult.Msg,
+		txResult.Meta,
+	)
 	utils.Assert(tx != nil, "unable to execute tx")
 	require.False(t, tx.Err)
 
-	parser := instructionsparser.Parser{
-		WalletAddress:      wallet.PublicKey().String(),
-		AssociatedAccounts: []*instructionsparser.AssociatedAccount{},
-	}
-
-	executedIx := tx.Ixs[0]
-	associatedAccounts := parser.Parse(executedIx, signature)
+	events, associatedAccounts := ixparser.ParseInstruction(tx.Ixs[0], wallet.PublicKey().String(), txResult.Signature)
 
 	require.Len(t, associatedAccounts, 0)
-
-	event := executedIx.Events[0]
-	expectedEvent := instructionsparser.TransferEventData{
+	event := events[0]
+	expectedEvent := ixparser.TransferEventData{
 		From:    wallet.PublicKey().String(),
 		To:      receiver.PublicKey().String(),
 		Amount:  amount,
 		Program: system.ProgramID.String(),
 		IsRent:  true,
 	}
-
-	require.Equal(t, instructionsparser.EventTransfer, event.Kind())
 	require.Equal(t, &expectedEvent, event)
 }
 
 func TestSystemCreateAccountWithSeed(t *testing.T) {
 	t.Parallel()
 
-	wallet, rpcClient := testutils.InitSolana()
-	defer testutils.CleanupSolana()
+	rpcClient, wallet := testutils.InitSolana()
 
 	amount := uint64(1_000_000_000)
 	seed := "seed"
@@ -77,75 +74,69 @@ func TestSystemCreateAccountWithSeed(t *testing.T) {
 		receiver,
 		base.PublicKey(),
 	).Build()
-	signature, tx := testutils.ExecuteTx(context.Background(), rpcClient, []solana.Instruction{ix}, []*solana.Wallet{wallet, base})
+	txResult := testutils.ExecuteTx(context.Background(), rpcClient, []solana.Instruction{ix}, []*solana.Wallet{wallet, base})
+	tx := walletfetcher.DecompileOnchainTransaction(
+		txResult.Signature,
+		txResult.Slot,
+		txResult.BlockTime,
+		txResult.Msg,
+		txResult.Meta,
+	)
 	utils.Assert(tx != nil, "unable to execute tx")
 	require.False(t, tx.Err)
 
-	parser := instructionsparser.Parser{
-		WalletAddress:      wallet.PublicKey().String(),
-		AssociatedAccounts: []*instructionsparser.AssociatedAccount{},
-	}
-
-	executedIx := tx.Ixs[0]
-	associatedAccounts := parser.Parse(executedIx, signature)
+	events, associatedAccounts := ixparser.ParseInstruction(tx.Ixs[0], wallet.PublicKey().String(), txResult.Signature)
 
 	require.Empty(t, associatedAccounts)
-
-	event := executedIx.Events[0]
-	expectedEvent := instructionsparser.TransferEventData{
+	event := events[0]
+	expectedEvent := ixparser.TransferEventData{
 		From:    wallet.PublicKey().String(),
 		To:      receiver.String(),
 		Amount:  amount,
 		Program: system.ProgramID.String(),
 		IsRent:  true,
 	}
-
-	require.Equal(t, instructionsparser.EventTransfer, event.Kind())
 	require.Equal(t, &expectedEvent, event)
 }
 
 func TestSystemTransfer(t *testing.T) {
 	t.Parallel()
 
-	wallet, rpcClient := testutils.InitSolana()
-	defer testutils.CleanupSolana()
+	rpcClient, wallet := testutils.InitSolana()
 
 	amount := uint64(1_000_000_000)
 	receiver := solana.NewWallet()
 
 	ix := system.NewTransferInstruction(amount, wallet.PublicKey(), receiver.PublicKey()).Build()
-	signature, tx := testutils.ExecuteTx(context.Background(), rpcClient, []solana.Instruction{ix}, []*solana.Wallet{wallet})
+	txResult := testutils.ExecuteTx(context.Background(), rpcClient, []solana.Instruction{ix}, []*solana.Wallet{wallet})
+	tx := walletfetcher.DecompileOnchainTransaction(
+		txResult.Signature,
+		txResult.Slot,
+		txResult.BlockTime,
+		txResult.Msg,
+		txResult.Meta,
+	)
 	utils.Assert(tx != nil, "unable to execute tx")
 	require.False(t, tx.Err)
 
-	parser := instructionsparser.Parser{
-		WalletAddress:      wallet.PublicKey().String(),
-		AssociatedAccounts: []*instructionsparser.AssociatedAccount{},
-	}
-
-	executedIx := tx.Ixs[0]
-	associatedAccounts := parser.Parse(executedIx, signature)
+	events, associatedAccounts := ixparser.ParseInstruction(tx.Ixs[0], wallet.PublicKey().String(), txResult.Signature)
 
 	require.Empty(t, associatedAccounts)
-
-	event := executedIx.Events[0]
-	expectedEvent := instructionsparser.TransferEventData{
+	event := events[0]
+	expectedEvent := ixparser.TransferEventData{
 		From:    wallet.PublicKey().String(),
 		To:      receiver.PublicKey().String(),
 		Amount:  amount,
 		Program: system.ProgramID.String(),
 		IsRent:  false,
 	}
-
-	require.Equal(t, instructionsparser.EventTransfer, event.Kind())
 	require.Equal(t, &expectedEvent, event)
 }
 
 func TestSystemTransferWithSeed(t *testing.T) {
 	t.Parallel()
 
-	wallet, rpcClient := testutils.InitSolana()
-	defer testutils.CleanupSolana()
+	rpcClient, wallet := testutils.InitSolana()
 
 	amount := uint64(100_000_000)
 	seed := "seed"
@@ -174,64 +165,59 @@ func TestSystemTransferWithSeed(t *testing.T) {
 			receiver,
 		).Build(),
 	}
-	signature, tx := testutils.ExecuteTx(context.Background(), rpcClient, ixs, []*solana.Wallet{wallet, base})
+	txResult := testutils.ExecuteTx(context.Background(), rpcClient, ixs, []*solana.Wallet{wallet, base})
+	tx := walletfetcher.DecompileOnchainTransaction(
+		txResult.Signature,
+		txResult.Slot,
+		txResult.BlockTime,
+		txResult.Msg,
+		txResult.Meta,
+	)
 	utils.Assert(tx != nil, "unable to execute tx")
 	require.False(t, tx.Err)
 
-	parser := instructionsparser.Parser{
-		WalletAddress:      wallet.PublicKey().String(),
-		AssociatedAccounts: []*instructionsparser.AssociatedAccount{},
-	}
-
-	executedIx := tx.Ixs[1]
-	associatedAccounts := parser.Parse(executedIx, signature)
+	events, associatedAccounts := ixparser.ParseInstruction(tx.Ixs[1], wallet.PublicKey().String(), txResult.Signature)
 
 	require.Empty(t, associatedAccounts)
-
-	event := executedIx.Events[0]
-	expectedEvent := instructionsparser.TransferEventData{
+	event := events[0]
+	expectedEvent := ixparser.TransferEventData{
 		From:    accountWithSeed.String(),
 		To:      receiver.String(),
 		Amount:  amount,
 		Program: system.ProgramID.String(),
 		IsRent:  false,
 	}
-
-	require.Equal(t, instructionsparser.EventTransfer, event.Kind())
 	require.Equal(t, &expectedEvent, event)
 }
 
 func TestSystemWithdrawNonceAccount(t *testing.T) {
 	t.Parallel()
 
-	wallet, rpcClient := testutils.InitSolana()
-	defer testutils.CleanupSolana()
+	rpcClient, wallet := testutils.InitSolana()
 
 	nonceAccount := solana.NewWallet()
 	ixs := []solana.Instruction{
 		system.NewCreateAccountInstruction(1_000_000_000, 500, system.ProgramID, wallet.PublicKey(), nonceAccount.PublicKey()).Build(),
 		system.NewWithdrawNonceAccountInstruction(5_000, nonceAccount.PublicKey(), wallet.PublicKey(), solana.SysVarRecentBlockHashesPubkey, solana.SysVarRentPubkey, wallet.PublicKey()).Build(),
 	}
-	signature, tx := testutils.ExecuteTx(context.Background(), rpcClient, ixs, []*solana.Wallet{wallet, nonceAccount})
+	txResult := testutils.ExecuteTx(context.Background(), rpcClient, ixs, []*solana.Wallet{wallet, nonceAccount})
+	tx := walletfetcher.DecompileOnchainTransaction(
+		txResult.Signature,
+		txResult.Slot,
+		txResult.BlockTime,
+		txResult.Msg,
+		txResult.Meta,
+	)
 	utils.Assert(tx != nil, "unable to execute tx")
 	require.False(t, tx.Err)
 
-	parser := instructionsparser.Parser{
-		WalletAddress:      wallet.PublicKey().String(),
-		AssociatedAccounts: []*instructionsparser.AssociatedAccount{},
-	}
-
-	executedIx := tx.Ixs[1]
-	associatedAccounts := parser.Parse(executedIx, signature)
+	events, associatedAccounts := ixparser.ParseInstruction(tx.Ixs[1], wallet.PublicKey().String(), txResult.Signature)
 
 	require.Empty(t, associatedAccounts)
-
-	event := executedIx.Events[0]
-	expectedEvent := instructionsparser.CloseAccountEventData{
+	event := events[0]
+	expectedEvent := ixparser.CloseAccountEventData{
 		Account: nonceAccount.PublicKey().String(),
 		To:      wallet.PublicKey().String(),
 	}
-
-	require.Equal(t, instructionsparser.EventCloseAccount, event.Kind())
 	require.Equal(t, &expectedEvent, event)
 }

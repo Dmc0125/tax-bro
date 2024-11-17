@@ -3,25 +3,22 @@ package testutils
 import (
 	"context"
 	"log"
+	"path"
 	"path/filepath"
 	"tax-bro/pkg/utils"
 	"time"
 
-	"github.com/jmoiron/sqlx"
+	"github.com/jackc/pgx/v5"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 	"github.com/testcontainers/testcontainers-go/wait"
 )
 
-type PostgresContainer struct {
-	*sqlx.DB
-	dbUrl   string
-	cleanup func()
-}
-
-func NewPostgresContainer(ctx context.Context, migrationsDir string) PostgresContainer {
+func InitDb() (*pgx.Conn, func()) {
+	projectDir := utils.GetProjectDir()
+	migrationsDir := path.Join(projectDir, "./db_migrations")
 	postgres, err := postgres.Run(
-		ctx,
+		context.Background(),
 		"docker.io/postgres:16-alpine",
 		postgres.WithInitScripts(
 			filepath.Join(migrationsDir, "/00_setup.up.sql"),
@@ -34,20 +31,13 @@ func NewPostgresContainer(ctx context.Context, migrationsDir string) PostgresCon
 				WithOccurrence(2).WithStartupTimeout(10*time.Second)),
 	)
 	utils.AssertNoErr(err, "unable to start postgres container")
-
-	dbUrl, err := postgres.ConnectionString(context.Background(), "sslmode=disable")
-	utils.AssertNoErr(err)
-	db, err := sqlx.Open("postgres", dbUrl)
-	utils.AssertNoErr(err, "unable to open postgres connection")
-
-	return PostgresContainer{
-		dbUrl: dbUrl,
-		DB:    db,
-		cleanup: func() {
-			db.Close()
-			if err := testcontainers.TerminateContainer(postgres); err != nil {
-				log.Printf("unable to gracefully terminate postgres container: %s", err)
-			}
-		},
+	db, err := pgx.Connect(context.Background(), postgres.MustConnectionString(context.Background(), "sslmode=disable"))
+	utils.AssertNoErr(err, "unable to connect to db")
+	cleanup := func() {
+		db.Close(context.Background())
+		if err := testcontainers.TerminateContainer(postgres); err != nil {
+			log.Printf("unable to gracefully terminate postgres container: %s", err)
+		}
 	}
+	return db, cleanup
 }

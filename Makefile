@@ -14,3 +14,9 @@ live/tailwind:
 
 live:
 	make -j3 live/tailwind live/templ live/server
+
+test:
+	@bash ./scripts/run_tests.sh $(if $(ARGS),args="$(ARGS)") $(if $(TEST_DIR),test-dir="$(TEST_DIR)")
+
+generate-sql:
+	@bash ./scripts/sql_gen.sh

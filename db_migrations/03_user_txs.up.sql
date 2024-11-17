@@ -17,7 +17,10 @@ CREATE TABLE wallet (
 
     label VARCHAR(50),
     signatures INTEGER NOT NULL DEFAULT 0,
-    associated_accounts INTEGER NOT NULL DEFAULT 0
+    associated_accounts INTEGER NOT NULL DEFAULT 0,
+
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE wallet_to_signature (
@@ -27,7 +30,10 @@ CREATE TABLE wallet_to_signature (
 
     FOREIGN KEY (wallet_id) REFERENCES wallet(id) ON DELETE CASCADE ON UPDATE CASCADE,
     FOREIGN KEY (signature_id) REFERENCES "signature"(id),
-    UNIQUE (wallet_id, signature_id)
+    UNIQUE (wallet_id, signature_id),
+
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TYPE associated_account_type AS ENUM ('token');
@@ -42,7 +48,10 @@ CREATE TABLE associated_account (
     FOREIGN KEY (wallet_id) REFERENCES wallet(id) ON DELETE CASCADE ON UPDATE CASCADE,
     FOREIGN KEY (last_signature_id) REFERENCES "signature"(id),
     FOREIGN KEY (address_id) REFERENCES "address"(id),
-    UNIQUE (wallet_id, address_id)
+    UNIQUE (wallet_id, address_id),
+
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TYPE sync_wallet_request_status AS ENUM ('queued', 'fetching_transactions', 'parsing_events');
@@ -52,5 +61,8 @@ CREATE TABLE sync_wallet_request (
     wallet_id INTEGER UNIQUE NOT NULL,
     "status" sync_wallet_request_status NOT NULL DEFAULT 'queued',
 
-    FOREIGN KEY (wallet_id) REFERENCES wallet (id) ON DELETE CASCADE ON UPDATE CASCADE
+    FOREIGN KEY (wallet_id) REFERENCES wallet (id) ON DELETE CASCADE ON UPDATE CASCADE,
+
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );

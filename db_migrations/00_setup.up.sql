@@ -12,7 +12,7 @@ BEGIN
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION add_timestamps_cols()
+CREATE OR REPLACE FUNCTION add_update_ts_trigger()
 RETURNS event_trigger
 LANGUAGE plpgsql
 AS $$
@@ -24,17 +24,11 @@ BEGIN
     LOOP
         -- Check if the new table should have timestamp columns
         SELECT EXISTS (
-            SELECT 1 FROM with_timestamps 
+            SELECT 1 FROM with_timestamps
             WHERE table_name = obj.object_identity::regclass::text
         ) INTO should_add;
 
         IF should_add THEN
-            EXECUTE format('
-                ALTER TABLE %s
-                ADD COLUMN created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                ADD COLUMN updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-            ', obj.object_identity);
-            
             EXECUTE format('
                 CREATE TRIGGER update_timestamp
                 BEFORE UPDATE ON %s
@@ -49,6 +43,6 @@ $$;
 CREATE EVENT TRIGGER add_timestamps_trigger
 ON ddl_command_end
 WHEN TAG IN ('CREATE TABLE')
-EXECUTE FUNCTION add_timestamps_cols();
+EXECUTE FUNCTION add_update_ts_trigger();
 
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";

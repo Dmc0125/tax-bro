@@ -5,7 +5,9 @@ INSERT INTO with_timestamps (table_name) VALUES ('account'), ('auth');
 CREATE TABLE account (
     id SERIAL PRIMARY KEY NOT NULL,
     selected_auth_provider auth_provider_type NOT NULL,
-    email VARCHAR(255) UNIQUE NOT NULL
+    email VARCHAR(255) UNIQUE NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX account_email ON account(email);
@@ -20,7 +22,10 @@ CREATE TABLE auth (
 
     UNIQUE (account_id, p_type),
     UNIQUE (provider_id, p_type),
-    FOREIGN KEY (account_id) REFERENCES account(id)
+    FOREIGN KEY (account_id) REFERENCES account(id),
+
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE session (

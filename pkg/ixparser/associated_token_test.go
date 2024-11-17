@@ -1,10 +1,11 @@
-package instructionsparser_test
+package ixparser_test
 
 import (
 	"context"
-	instructionsparser "tax-bro/pkg/instructions_parser"
+	"tax-bro/pkg/ixparser"
 	testutils "tax-bro/pkg/test_utils"
 	"tax-bro/pkg/utils"
+	"tax-bro/pkg/walletfetcher"
 	"testing"
 
 	"github.com/gagliardetto/solana-go"
@@ -12,15 +13,14 @@ import (
 	"github.com/gagliardetto/solana-go/programs/system"
 	"github.com/gagliardetto/solana-go/programs/token"
 	"github.com/gagliardetto/solana-go/rpc"
-	"github.com/test-go/testify/require"
+	"github.com/stretchr/testify/require"
 )
 
 // disc 0
 func TestATACreate(t *testing.T) {
 	t.Parallel()
 
-	wallet, rpcClient := testutils.InitSolana()
-	defer testutils.CleanupSolana()
+	rpcClient, wallet := testutils.InitSolana()
 
 	mintAccount, ixs := testutils.CreateInitMintIxs(rpcClient, wallet)
 
@@ -42,36 +42,37 @@ func TestATACreate(t *testing.T) {
 		{PublicKey: system.ProgramID},
 		{PublicKey: token.ProgramID},
 	}, []byte{0}))
-	signature, tx := testutils.ExecuteTx(context.Background(), rpcClient, ixs, []*solana.Wallet{wallet, mintAccount})
+	txResult := testutils.ExecuteTx(context.Background(), rpcClient, ixs, []*solana.Wallet{wallet, mintAccount})
+	tx := walletfetcher.DecompileOnchainTransaction(
+		txResult.Signature,
+		txResult.Slot,
+		txResult.BlockTime,
+		txResult.Msg,
+		txResult.Meta,
+	)
 	utils.Assert(tx != nil, "unable to execute tx")
 	require.False(t, tx.Err)
 
-	parser := instructionsparser.Parser{
-		WalletAddress:      wallet.PublicKey().String(),
-		AssociatedAccounts: []*instructionsparser.AssociatedAccount{},
-	}
-
 	executedIx := tx.Ixs[2]
+	events, associatedAccounts := ixparser.ParseInstruction(executedIx, wallet.PublicKey().String(), txResult.Signature)
 
-	associatedAccounts := parser.Parse(executedIx, signature)
 	require.Len(t, associatedAccounts, 1)
 
-	require.Len(t, executedIx.Events, 1)
-	expectedEvent := &instructionsparser.TransferEventData{
+	require.Len(t, events, 1)
+	expectedEvent := &ixparser.TransferEventData{
 		From:    wallet.PublicKey().String(),
 		To:      ata.String(),
 		Amount:  amount,
 		Program: associatedtokenaccount.ProgramID.String(),
 		IsRent:  true,
 	}
-	require.Equal(t, expectedEvent, executedIx.Events[0])
+	require.Equal(t, expectedEvent, events[0])
 }
 
 func TestATACreateWithNoData(t *testing.T) {
 	t.Parallel()
 
-	wallet, rpcClient := testutils.InitSolana()
-	defer testutils.CleanupSolana()
+	rpcClient, wallet := testutils.InitSolana()
 
 	mintAccount, ixs := testutils.CreateInitMintIxs(rpcClient, wallet)
 
@@ -93,37 +94,37 @@ func TestATACreateWithNoData(t *testing.T) {
 		{PublicKey: system.ProgramID},
 		{PublicKey: token.ProgramID},
 	}, []byte{}))
-	signature, tx := testutils.ExecuteTx(context.Background(), rpcClient, ixs, []*solana.Wallet{wallet, mintAccount})
+	txResult := testutils.ExecuteTx(context.Background(), rpcClient, ixs, []*solana.Wallet{wallet, mintAccount})
+	tx := walletfetcher.DecompileOnchainTransaction(
+		txResult.Signature,
+		txResult.Slot,
+		txResult.BlockTime,
+		txResult.Msg,
+		txResult.Meta,
+	)
 	utils.Assert(tx != nil, "unable to execute tx")
 	require.False(t, tx.Err)
 
-	parser := instructionsparser.Parser{
-		WalletAddress:      wallet.PublicKey().String(),
-		AssociatedAccounts: []*instructionsparser.AssociatedAccount{},
-	}
-
 	executedIx := tx.Ixs[2]
+	events, associatedAccounts := ixparser.ParseInstruction(executedIx, wallet.PublicKey().String(), txResult.Signature)
 
-	associatedAccounts := parser.Parse(executedIx, signature)
 	require.Len(t, associatedAccounts, 1)
 
-	require.Len(t, executedIx.Events, 1)
-	expectedEvent := &instructionsparser.TransferEventData{
+	require.Len(t, events, 1)
+	expectedEvent := &ixparser.TransferEventData{
 		From:    wallet.PublicKey().String(),
 		To:      ata.String(),
 		Amount:  amount,
 		Program: associatedtokenaccount.ProgramID.String(),
 		IsRent:  true,
 	}
-	require.Equal(t, expectedEvent, executedIx.Events[0])
+	require.Equal(t, expectedEvent, events[0])
 }
 
-// create idempotent without balance - disc: 1
 func TestATACreateIdempotentWithoutBalance(t *testing.T) {
 	t.Parallel()
 
-	wallet, rpcClient := testutils.InitSolana()
-	defer testutils.CleanupSolana()
+	rpcClient, wallet := testutils.InitSolana()
 
 	mintAccount, ixs := testutils.CreateInitMintIxs(rpcClient, wallet)
 
@@ -145,37 +146,37 @@ func TestATACreateIdempotentWithoutBalance(t *testing.T) {
 		{PublicKey: system.ProgramID},
 		{PublicKey: token.ProgramID},
 	}, []byte{1}))
-	signature, tx := testutils.ExecuteTx(context.Background(), rpcClient, ixs, []*solana.Wallet{wallet, mintAccount})
+	txResult := testutils.ExecuteTx(context.Background(), rpcClient, ixs, []*solana.Wallet{wallet, mintAccount})
+	tx := walletfetcher.DecompileOnchainTransaction(
+		txResult.Signature,
+		txResult.Slot,
+		txResult.BlockTime,
+		txResult.Msg,
+		txResult.Meta,
+	)
 	utils.Assert(tx != nil, "unable to execute tx")
 	require.False(t, tx.Err)
 
-	parser := instructionsparser.Parser{
-		WalletAddress:      wallet.PublicKey().String(),
-		AssociatedAccounts: []*instructionsparser.AssociatedAccount{},
-	}
-
 	executedIx := tx.Ixs[2]
+	events, associatedAccounts := ixparser.ParseInstruction(executedIx, wallet.PublicKey().String(), txResult.Signature)
 
-	associatedAccounts := parser.Parse(executedIx, signature)
 	require.Len(t, associatedAccounts, 1)
 
-	require.Len(t, executedIx.Events, 1)
-	expectedEvent := &instructionsparser.TransferEventData{
+	require.Len(t, events, 1)
+	expectedEvent := &ixparser.TransferEventData{
 		From:    wallet.PublicKey().String(),
 		To:      ata.String(),
 		Amount:  amount,
 		Program: associatedtokenaccount.ProgramID.String(),
 		IsRent:  true,
 	}
-	require.Equal(t, expectedEvent, executedIx.Events[0])
+	require.Equal(t, expectedEvent, events[0])
 }
 
-// create idempotent with not enough balance - disc: 1
 func TestATACreateIdempotentWithNotEnoughBalance(t *testing.T) {
 	t.Parallel()
 
-	wallet, rpcClient := testutils.InitSolana()
-	defer testutils.CleanupSolana()
+	rpcClient, wallet := testutils.InitSolana()
 
 	mintAccount, ixs := testutils.CreateInitMintIxs(rpcClient, wallet)
 
@@ -201,37 +202,37 @@ func TestATACreateIdempotentWithNotEnoughBalance(t *testing.T) {
 			{PublicKey: token.ProgramID},
 		}, []byte{1}),
 	)
-	signature, tx := testutils.ExecuteTx(context.Background(), rpcClient, ixs, []*solana.Wallet{wallet, mintAccount})
+	txResult := testutils.ExecuteTx(context.Background(), rpcClient, ixs, []*solana.Wallet{wallet, mintAccount})
+	tx := walletfetcher.DecompileOnchainTransaction(
+		txResult.Signature,
+		txResult.Slot,
+		txResult.BlockTime,
+		txResult.Msg,
+		txResult.Meta,
+	)
 	utils.Assert(tx != nil, "unable to execute tx")
 	require.False(t, tx.Err)
 
-	parser := instructionsparser.Parser{
-		WalletAddress:      wallet.PublicKey().String(),
-		AssociatedAccounts: []*instructionsparser.AssociatedAccount{},
-	}
-
 	executedIx := tx.Ixs[3]
+	events, associatedAccounts := ixparser.ParseInstruction(executedIx, wallet.PublicKey().String(), txResult.Signature)
 
-	associatedAccounts := parser.Parse(executedIx, signature)
 	require.Len(t, associatedAccounts, 1)
 
-	require.Len(t, executedIx.Events, 1)
-	expectedEvent := &instructionsparser.TransferEventData{
+	require.Len(t, events, 1)
+	expectedEvent := &ixparser.TransferEventData{
 		From:    wallet.PublicKey().String(),
 		To:      ata.String(),
 		Amount:  amount - 1000,
 		Program: associatedtokenaccount.ProgramID.String(),
 		IsRent:  true,
 	}
-	require.Equal(t, expectedEvent, executedIx.Events[0])
+	require.Equal(t, expectedEvent, events[0])
 }
 
-// create idempotent with more than enough balance - disc: 1
 func TestATACreateIdempotentWithEnoughBalance(t *testing.T) {
 	t.Parallel()
 
-	wallet, rpcClient := testutils.InitSolana()
-	defer testutils.CleanupSolana()
+	rpcClient, wallet := testutils.InitSolana()
 
 	mintAccount, ixs := testutils.CreateInitMintIxs(rpcClient, wallet)
 
@@ -257,20 +258,20 @@ func TestATACreateIdempotentWithEnoughBalance(t *testing.T) {
 			{PublicKey: token.ProgramID},
 		}, []byte{1}),
 	)
-	signature, tx := testutils.ExecuteTx(context.Background(), rpcClient, ixs, []*solana.Wallet{wallet, mintAccount})
-
+	txResult := testutils.ExecuteTx(context.Background(), rpcClient, ixs, []*solana.Wallet{wallet, mintAccount})
+	tx := walletfetcher.DecompileOnchainTransaction(
+		txResult.Signature,
+		txResult.Slot,
+		txResult.BlockTime,
+		txResult.Msg,
+		txResult.Meta,
+	)
 	utils.Assert(tx != nil, "unable to execute tx")
 	require.False(t, tx.Err)
 
-	parser := instructionsparser.Parser{
-		WalletAddress:      wallet.PublicKey().String(),
-		AssociatedAccounts: []*instructionsparser.AssociatedAccount{},
-	}
-
 	executedIx := tx.Ixs[3]
+	events, associatedAccounts := ixparser.ParseInstruction(executedIx, wallet.PublicKey().String(), txResult.Signature)
 
-	associatedAccounts := parser.Parse(executedIx, signature)
 	require.Len(t, associatedAccounts, 1)
-
-	require.Empty(t, executedIx.Events)
+	require.Empty(t, events)
 }

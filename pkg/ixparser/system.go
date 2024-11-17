@@ -1,4 +1,4 @@
-package instructionsparser
+package ixparser
 
 import (
 	"encoding/binary"
@@ -9,7 +9,7 @@ import (
 
 var systemProgramAddress = system.ProgramID.String()
 
-func (parser *Parser) parseSystemIx(ix ParsableInstruction) {
+func parseSystemIx(ix ParsableInstruction) Event {
 	dataWithDiscriminator := ix.GetData()
 	utils.Assert(len(dataWithDiscriminator) >= 4, ErrMissingDiscriminator)
 
@@ -18,46 +18,46 @@ func (parser *Parser) parseSystemIx(ix ParsableInstruction) {
 
 	switch disc {
 	case system.Instruction_Transfer:
-		accounts := ix.GetAccountsAddresses()
+		accounts := ix.GetAccounts()
 		utils.Assert(len(accounts) >= 2, ErrNotEnoughAccounts)
 		utils.Assert(len(data) >= 8, ErrInvalidData)
 
 		lamports := binary.LittleEndian.Uint64(data)
-		ix.AppendEvents(&TransferEventData{
+		return &TransferEventData{
 			From:    accounts[0],
 			To:      accounts[1],
 			Amount:  lamports,
 			Program: systemProgramAddress,
 			IsRent:  false,
-		})
+		}
 	case system.Instruction_TransferWithSeed:
-		accounts := ix.GetAccountsAddresses()
+		accounts := ix.GetAccounts()
 		utils.Assert(len(accounts) >= 3, ErrNotEnoughAccounts)
 		utils.Assert(len(data) >= 8, ErrInvalidData)
 
 		lamports := binary.LittleEndian.Uint64(data)
-		ix.AppendEvents(&TransferEventData{
+		return &TransferEventData{
 			From:    accounts[0],
 			To:      accounts[2],
 			Amount:  lamports,
 			Program: systemProgramAddress,
 			IsRent:  false,
-		})
+		}
 	case system.Instruction_CreateAccount:
-		accounts := ix.GetAccountsAddresses()
+		accounts := ix.GetAccounts()
 		utils.Assert(len(accounts) >= 2, ErrNotEnoughAccounts)
 		utils.Assert(len(data) >= 8, ErrInvalidData)
 
 		lamports := binary.LittleEndian.Uint64(data)
-		ix.AppendEvents(&TransferEventData{
+		return &TransferEventData{
 			From:    accounts[0],
 			To:      accounts[1],
 			Amount:  lamports,
 			Program: systemProgramAddress,
 			IsRent:  true,
-		})
+		}
 	case system.Instruction_CreateAccountWithSeed:
-		accounts := ix.GetAccountsAddresses()
+		accounts := ix.GetAccounts()
 		utils.Assert(len(accounts) >= 2, ErrNotEnoughAccounts)
 
 		utils.Assert(len(data) >= 40, ErrInvalidData)
@@ -66,22 +66,21 @@ func (parser *Parser) parseSystemIx(ix ParsableInstruction) {
 		utils.Assert(len(data) >= 40+int(seedLen+seedPadding), ErrInvalidData)
 		lamports := binary.LittleEndian.Uint64(data[40+seedLen+seedPadding:])
 
-		ix.AppendEvents(&TransferEventData{
+		return &TransferEventData{
 			From:    accounts[0],
 			To:      accounts[1],
 			Amount:  lamports,
 			Program: systemProgramAddress,
 			IsRent:  true,
-		})
+		}
 	case system.Instruction_WithdrawNonceAccount:
-		accounts := ix.GetAccountsAddresses()
+		accounts := ix.GetAccounts()
 		utils.Assert(len(accounts) >= 2, ErrNotEnoughAccounts)
-		ix.AppendEvents(&CloseAccountEventData{
+		return &CloseAccountEventData{
 			Account: accounts[0],
 			To:      accounts[1],
-		})
-	default:
-		return
+		}
 	}
 
+	return nil
 }

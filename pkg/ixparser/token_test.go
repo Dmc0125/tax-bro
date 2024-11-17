@@ -1,26 +1,34 @@
-package instructionsparser_test
+package ixparser_test
 
 import (
 	"context"
-	instructionsparser "tax-bro/pkg/instructions_parser"
+	"tax-bro/pkg/dbsqlc"
+	"tax-bro/pkg/ixparser"
 	testutils "tax-bro/pkg/test_utils"
 	"tax-bro/pkg/utils"
+	"tax-bro/pkg/walletfetcher"
 	"testing"
 
 	"github.com/gagliardetto/solana-go"
 	"github.com/gagliardetto/solana-go/programs/system"
 	"github.com/gagliardetto/solana-go/programs/token"
-	"github.com/test-go/testify/require"
+	"github.com/stretchr/testify/require"
 )
 
 func TestTokenInitializeAccount(t *testing.T) {
 	t.Parallel()
 
-	wallet, rpcClient := testutils.InitSolana()
-	defer testutils.CleanupSolana()
+	rpcClient, wallet := testutils.InitSolana()
 
 	mintAccount, ixs := testutils.CreateInitMintIxs(rpcClient, wallet)
-	_, tx := testutils.ExecuteTx(context.Background(), rpcClient, ixs, []*solana.Wallet{wallet, mintAccount})
+	txResult := testutils.ExecuteTx(context.Background(), rpcClient, ixs, []*solana.Wallet{wallet, mintAccount})
+	tx := walletfetcher.DecompileOnchainTransaction(
+		txResult.Signature,
+		txResult.Slot,
+		txResult.BlockTime,
+		txResult.Msg,
+		txResult.Meta,
+	)
 	utils.Assert(tx != nil, "unable to execute init mint")
 	require.False(t, tx.Err)
 
@@ -53,34 +61,35 @@ func TestTokenInitializeAccount(t *testing.T) {
 			f(tokenAccount.PublicKey(), mintAccount.PublicKey(), solana.SysVarRentPubkey),
 		}
 
-		signature, tx := testutils.ExecuteTx(context.Background(), rpcClient, ixs, []*solana.Wallet{wallet, tokenAccount})
+		txResult := testutils.ExecuteTx(context.Background(), rpcClient, ixs, []*solana.Wallet{wallet, tokenAccount})
+		tx := walletfetcher.DecompileOnchainTransaction(
+			txResult.Signature,
+			txResult.Slot,
+			txResult.BlockTime,
+			txResult.Msg,
+			txResult.Meta,
+		)
 		utils.Assert(tx != nil, "unable to execute tx")
 		require.False(t, tx.Err)
 
-		parser := instructionsparser.Parser{
-			WalletAddress:      wallet.PublicKey().String(),
-			AssociatedAccounts: []*instructionsparser.AssociatedAccount{},
-		}
-
-		executedIx := tx.Ixs[1]
-		associatedAccounts := parser.Parse(executedIx, signature)
+		events, associatedAccounts := ixparser.ParseInstruction(tx.Ixs[1], wallet.PublicKey().String(), txResult.Signature)
 
 		require.Len(t, associatedAccounts, 1)
-		expectedAssociatedAccount := instructionsparser.AssociatedAccount{
-			Kind:    0,
-			Address: tokenAccount.PublicKey().String(),
+		tokenAccountAddress := tokenAccount.PublicKey().String()
+		expectedAssociatedAccount := ixparser.AssociatedAccount{
+			Type:    dbsqlc.AssociatedAccountTypeToken,
+			Address: tokenAccountAddress,
 		}
-		require.Equal(t, &expectedAssociatedAccount, associatedAccounts[0])
+		require.Equal(t, &expectedAssociatedAccount, associatedAccounts[tokenAccountAddress])
 
-		require.Len(t, executedIx.Events, 0)
+		require.Len(t, events, 0)
 	}
 }
 
 func TestTokenMintBurnClose(t *testing.T) {
 	t.Parallel()
 
-	wallet, rpcClient := testutils.InitSolana()
-	defer testutils.CleanupSolana()
+	rpcClient, wallet := testutils.InitSolana()
 
 	mintAccount, ixs := testutils.CreateInitMintIxs(rpcClient, wallet)
 	tokenAccount, initTAIxs := testutils.CreateInitTokenAccountIxs(rpcClient, wallet, mintAccount.PublicKey())
@@ -95,26 +104,26 @@ func TestTokenMintBurnClose(t *testing.T) {
 		token.NewCloseAccountInstruction(tokenAccount.PublicKey(), wallet.PublicKey(), wallet.PublicKey(), []solana.PublicKey{}).Build(),
 	)
 
-	signature, tx := testutils.ExecuteTx(context.Background(), rpcClient, ixs, []*solana.Wallet{wallet, tokenAccount, mintAccount})
+	txResult := testutils.ExecuteTx(context.Background(), rpcClient, ixs, []*solana.Wallet{wallet, tokenAccount, mintAccount})
+	tx := walletfetcher.DecompileOnchainTransaction(
+		txResult.Signature,
+		txResult.Slot,
+		txResult.BlockTime,
+		txResult.Msg,
+		txResult.Meta,
+	)
 	utils.Assert(tx != nil, "unable to execute tx")
 	require.False(t, tx.Err)
 
-	parser := instructionsparser.Parser{
-		WalletAddress:      wallet.PublicKey().String(),
-		AssociatedAccounts: []*instructionsparser.AssociatedAccount{},
-	}
+	mintEvents := []ixparser.Event{}
 
-	for _, ix := range tx.Ixs[4:] {
-		associatedAccounts := parser.Parse(ix, signature)
+	for _, ix := range tx.Ixs[4:6] {
+		events, associatedAccounts := ixparser.ParseInstruction(ix, wallet.PublicKey().String(), txResult.Signature)
 		require.Empty(t, associatedAccounts)
-		require.Len(t, ix.Events, 1)
+		require.Len(t, events, 1)
+		mintEvents = append(mintEvents, events...)
 	}
-
-	mintEvents := []instructionsparser.Event{
-		tx.Ixs[4].Events[0],
-		tx.Ixs[5].Events[0],
-	}
-	expectedMintEvent := &instructionsparser.MintEventData{
+	expectedMintEvent := &ixparser.MintEventData{
 		To:     tokenAccount.PublicKey().String(),
 		Amount: 5,
 		Token:  mintAccount.PublicKey().String(),
@@ -123,11 +132,14 @@ func TestTokenMintBurnClose(t *testing.T) {
 		require.Equal(t, expectedMintEvent, e)
 	}
 
-	burnEvents := []instructionsparser.Event{
-		tx.Ixs[6].Events[0],
-		tx.Ixs[7].Events[0],
+	burnEvents := []ixparser.Event{}
+	for _, ix := range tx.Ixs[6:8] {
+		events, associatedAccounts := ixparser.ParseInstruction(ix, wallet.PublicKey().String(), txResult.Signature)
+		require.Empty(t, associatedAccounts)
+		require.Len(t, events, 1)
+		burnEvents = append(burnEvents, events...)
 	}
-	expectedBurnEvent := &instructionsparser.BurnEventData{
+	expectedBurnEvent := &ixparser.BurnEventData{
 		From:   tokenAccount.PublicKey().String(),
 		Amount: 5,
 		Token:  mintAccount.PublicKey().String(),
@@ -136,8 +148,10 @@ func TestTokenMintBurnClose(t *testing.T) {
 		require.Equal(t, expectedBurnEvent, e)
 	}
 
-	closeEvent := tx.Ixs[8].Events[0]
-	expectedCloseEvent := &instructionsparser.CloseAccountEventData{
+	events, associatedAccounts := ixparser.ParseInstruction(tx.Ixs[8], wallet.PublicKey().String(), txResult.Signature)
+	require.Len(t, associatedAccounts, 0)
+	closeEvent := events[0]
+	expectedCloseEvent := &ixparser.CloseAccountEventData{
 		Account: tokenAccount.PublicKey().String(),
 		To:      wallet.PublicKey().String(),
 	}
@@ -147,11 +161,9 @@ func TestTokenMintBurnClose(t *testing.T) {
 func TestTokenTransfer(t *testing.T) {
 	t.Parallel()
 
-	wallet, rpcClient := testutils.InitSolana()
-	defer testutils.CleanupSolana()
+	rpcClient, wallet := testutils.InitSolana()
 
 	mintAccount, ixs := testutils.CreateInitMintIxs(rpcClient, wallet)
-
 	tokenAccount1, initTA1Ixs := testutils.CreateInitTokenAccountIxs(rpcClient, wallet, mintAccount.PublicKey())
 	tokenAccount2, initTAI2xs := testutils.CreateInitTokenAccountIxs(rpcClient, wallet, mintAccount.PublicKey())
 
@@ -164,16 +176,18 @@ func TestTokenTransfer(t *testing.T) {
 		token.NewTransferCheckedInstruction(1, 0, tokenAccount1.PublicKey(), mintAccount.PublicKey(), tokenAccount2.PublicKey(), wallet.PublicKey(), []solana.PublicKey{}).Build(),
 	)
 
-	signature, tx := testutils.ExecuteTx(context.Background(), rpcClient, ixs, []*solana.Wallet{wallet, tokenAccount1, tokenAccount2, mintAccount})
+	txResult := testutils.ExecuteTx(context.Background(), rpcClient, ixs, []*solana.Wallet{wallet, tokenAccount1, tokenAccount2, mintAccount})
+	tx := walletfetcher.DecompileOnchainTransaction(
+		txResult.Signature,
+		txResult.Slot,
+		txResult.BlockTime,
+		txResult.Msg,
+		txResult.Meta,
+	)
 	utils.Assert(tx != nil, "unable to execute tx")
 	require.False(t, tx.Err)
 
-	parser := instructionsparser.Parser{
-		WalletAddress:      wallet.PublicKey().String(),
-		AssociatedAccounts: []*instructionsparser.AssociatedAccount{},
-	}
-
-	expectedTransferIx := &instructionsparser.TransferEventData{
+	expectedTransferEvent := &ixparser.TransferEventData{
 		From:    tokenAccount1.PublicKey().String(),
 		To:      tokenAccount2.PublicKey().String(),
 		Amount:  1,
@@ -182,9 +196,9 @@ func TestTokenTransfer(t *testing.T) {
 	}
 
 	for _, ix := range tx.Ixs[7:] {
-		associatedAccounts := parser.Parse(ix, signature)
+		events, associatedAccounts := ixparser.ParseInstruction(ix, wallet.PublicKey().String(), txResult.Signature)
 		require.Empty(t, associatedAccounts)
-		require.Len(t, ix.Events, 1)
-		require.Equal(t, expectedTransferIx, ix.Events[0])
+		require.Len(t, events, 1)
+		require.Equal(t, expectedTransferEvent, events[0])
 	}
 }

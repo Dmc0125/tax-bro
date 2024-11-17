@@ -1,7 +1,8 @@
-package instructionsparser
+package ixparser
 
 import (
 	"encoding/binary"
+	"tax-bro/pkg/dbsqlc"
 	"tax-bro/pkg/utils"
 
 	"github.com/gagliardetto/solana-go"
@@ -10,50 +11,59 @@ import (
 
 var tokenProgramAddress = token.ProgramID.String()
 
-func (parser *Parser) parseTokenIx(ix ParsableInstruction) (associatedAccounts []*AssociatedAccount) {
+func parseTokenIx(
+	ix ParsableInstruction,
+	walletAddress string,
+) ([]Event, map[string]*AssociatedAccount) {
+
 	dataWithDiscriminator := ix.GetData()
 	utils.Assert(len(dataWithDiscriminator) >= 1, ErrMissingDiscriminator)
 
 	disc := uint8(dataWithDiscriminator[0])
 	data := dataWithDiscriminator[1:]
 
+	events := make([]Event, 0)
+	associatedAccounts := make(map[string]*AssociatedAccount)
+
 	switch disc {
 	case token.Instruction_InitializeAccount:
-		accounts := ix.GetAccountsAddresses()
+		accounts := ix.GetAccounts()
 		utils.Assert(len(accounts) >= 3, ErrNotEnoughAccounts)
 
 		owner := accounts[2]
-		if owner == parser.WalletAddress {
-			associatedAccounts = append(associatedAccounts, &AssociatedAccount{
-				Kind:    TokenAssociatedAccount,
-				Address: accounts[0],
-			})
+		if owner == walletAddress {
+			address := accounts[0]
+			associatedAccounts[address] = &AssociatedAccount{
+				Type:    dbsqlc.AssociatedAccountTypeToken,
+				Address: address,
+			}
 		}
 	case token.Instruction_InitializeAccount3:
 		fallthrough
 	case token.Instruction_InitializeAccount2:
-		accounts := ix.GetAccountsAddresses()
+		accounts := ix.GetAccounts()
 		utils.Assert(len(accounts) >= 1, ErrNotEnoughAccounts)
 
 		utils.Assert(len(data) >= 32, ErrInvalidData)
 		ownerBytes := data[:32]
 		owner := solana.PublicKeyFromBytes(ownerBytes).String()
-		if owner == parser.WalletAddress {
-			associatedAccounts = append(associatedAccounts, &AssociatedAccount{
-				Kind:    TokenAssociatedAccount,
-				Address: accounts[0],
-			})
+		if owner == walletAddress {
+			address := accounts[0]
+			associatedAccounts[address] = &AssociatedAccount{
+				Type:    dbsqlc.AssociatedAccountTypeToken,
+				Address: address,
+			}
 		}
 	case token.Instruction_MintToChecked:
 		fallthrough
 	case token.Instruction_MintTo:
-		accounts := ix.GetAccountsAddresses()
+		accounts := ix.GetAccounts()
 		utils.Assert(len(accounts) >= 2, ErrNotEnoughAccounts)
 
 		utils.Assert(len(data) >= 8, ErrInvalidData)
 		amount := binary.LittleEndian.Uint64(data)
 
-		ix.AppendEvents(&MintEventData{
+		events = append(events, &MintEventData{
 			To:     accounts[1],
 			Amount: amount,
 			Token:  accounts[0],
@@ -61,33 +71,33 @@ func (parser *Parser) parseTokenIx(ix ParsableInstruction) (associatedAccounts [
 	case token.Instruction_BurnChecked:
 		fallthrough
 	case token.Instruction_Burn:
-		accounts := ix.GetAccountsAddresses()
+		accounts := ix.GetAccounts()
 		utils.Assert(len(accounts) >= 2, ErrNotEnoughAccounts)
 
 		utils.Assert(len(data) >= 8, ErrInvalidData)
 		amount := binary.LittleEndian.Uint64(data)
 
-		ix.AppendEvents(&BurnEventData{
+		events = append(events, &BurnEventData{
 			From:   accounts[0],
 			Amount: amount,
 			Token:  accounts[1],
 		})
 	case token.Instruction_CloseAccount:
-		accounts := ix.GetAccountsAddresses()
+		accounts := ix.GetAccounts()
 		utils.Assert(len(accounts) >= 2, ErrNotEnoughAccounts)
 
-		ix.AppendEvents(&CloseAccountEventData{
+		events = append(events, &CloseAccountEventData{
 			Account: accounts[0],
 			To:      accounts[1],
 		})
 	case token.Instruction_Transfer:
-		accounts := ix.GetAccountsAddresses()
+		accounts := ix.GetAccounts()
 		utils.Assert(len(accounts) >= 2, ErrNotEnoughAccounts)
 
 		utils.Assert(len(data) >= 8, ErrInvalidData)
 		amount := binary.LittleEndian.Uint64(data)
 
-		ix.AppendEvents(&TransferEventData{
+		events = append(events, &TransferEventData{
 			From:    accounts[0],
 			To:      accounts[1],
 			Amount:  amount,
@@ -95,13 +105,13 @@ func (parser *Parser) parseTokenIx(ix ParsableInstruction) (associatedAccounts [
 			IsRent:  false,
 		})
 	case token.Instruction_TransferChecked:
-		accounts := ix.GetAccountsAddresses()
+		accounts := ix.GetAccounts()
 		utils.Assert(len(accounts) >= 3, ErrNotEnoughAccounts)
 
 		utils.Assert(len(data) >= 8, ErrInvalidData)
 		amount := binary.LittleEndian.Uint64(data)
 
-		ix.AppendEvents(&TransferEventData{
+		events = append(events, &TransferEventData{
 			From:    accounts[0],
 			To:      accounts[2],
 			Amount:  amount,
@@ -110,5 +120,5 @@ func (parser *Parser) parseTokenIx(ix ParsableInstruction) (associatedAccounts [
 		})
 	}
 
-	return
+	return events, associatedAccounts
 }
