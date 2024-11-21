@@ -20,3 +20,15 @@ test:
 
 generate-sql:
 	@bash ./scripts/sql_gen.sh
+
+local/server:
+	go run ./cmd/sync_service/main.go
+
+local/db:
+	docker compose up
+
+local:
+	make -j2 local/server local/db
+
+migrate:
+	go run ./cmd/migrate/main.go $(DIR)

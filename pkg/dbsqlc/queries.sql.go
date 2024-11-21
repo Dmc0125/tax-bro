@@ -11,9 +11,24 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const AssignInstructionsToWallet = `-- name: AssignInstructionsToWallet :execrows
+INSERT INTO wallet_to_signature (wallet_id, signature_id) VALUES (
+    unnest($1::INTEGER[]),
+    unnest($2::INTEGER[])
+) ON CONFLICT (wallet_id, signature_id) DO NOTHING
+`
+
 type AssignInstructionsToWalletParams struct {
-	WalletID    int32 `json:"wallet_id"`
-	SignatureID int32 `json:"signature_id"`
+	WalletID    []int32 `json:"wallet_id"`
+	SignatureID []int32 `json:"signature_id"`
+}
+
+func (q *Queries) AssignInstructionsToWallet(ctx context.Context, arg *AssignInstructionsToWalletParams) (int64, error) {
+	result, err := q.db.Exec(ctx, AssignInstructionsToWallet, arg.WalletID, arg.SignatureID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const GetAddressesFromAddresses = `-- name: GetAddressesFromAddresses :many
@@ -53,7 +68,7 @@ FROM
 INNER JOIN
     address ON address.id = associated_account.address_id
 LEFT JOIN
-    signature ON signature.id = associated_account.signature_id
+    signature ON signature.id = associated_account.last_signature_id
 WHERE
     associated_account.wallet_id = $1
 `
@@ -119,81 +134,27 @@ func (q *Queries) GetLatestSyncWalletRequest(ctx context.Context) (*GetLatestSyn
 
 const GetTransactionsFromSignatures = `-- name: GetTransactionsFromSignatures :many
 SELECT
-    (
-        SELECT coalesce(json_agg(agg), '[]') FROM (
-    		SELECT
-    			address.value as program_address,
-    			instruction.data, (
-                    SELECT coalesce(json_agg(agg), '[]') FROM (
-                        SELECT
-                            address.id,
-                            address.value,
-                            array_position(instructions.accounts_ids, id) AS ord
-                        FROM
-                            address
-                        WHERE
-                            address.id = ANY(instruction.accounts_ids)
-                        ORDER BY
-                            ord ASC
-         			) AS agg
-          		) AS accounts,
-    			(
-    				SELECT coalesce(json_agg(agg), '[]') FROM (
-    					SELECT
-    						address.value AS program_address,
-    						inner_instruction.data, (
-                 			    SELECT coalesce(json_agg(agg), '[]') FROM (
-                                    SELECT
-                                        address.id,
-                                        address.value,
-                                        array_position(inner_instruction.accounts_ids, id) AS ord
-                                    FROM
-                                        address
-                                    WHERE
-                                        address.id = ANY(inner_instruction.accounts_ids)
-                                    ORDER BY
-                                        ord ASC
-                                ) AS agg
-                            ) AS accounts
-    					FROM
-    						inner_instruction
-    					INNER JOIN
-    						address ON address.id = inner_instruction.program_account_id
-    					WHERE
-    						inner_instruction.signature_id = instruction.signature_id
-    						AND inner_instruction.ix_index = instruction.index
-    					ORDER BY
-    						inner_instruction.index ASC
-    				) AS agg
-    			) AS inner_ixs
-    		FROM
-    			instruction
-    		INNER JOIN
-    			address ON address.id = instruction.program_account_id
-    		WHERE
-    			instruction.signature_id = signature.id
-    		ORDER BY
-    			instruction.index ASC
-    	) AS agg
-    ) AS ixs,
+    COALESCE(view_instructions.instructions, '[]'::jsonb) as ixs,
     transaction.logs,
     transaction.err,
     signature.value as signature,
     signature.id as signature_id
 FROM
-	signature
-INNER JOIN
-	transaction ON transaction.signature_id = signature.id
+    signature
+JOIN
+    transaction ON transaction.signature_id = signature.id
+LEFT JOIN
+    view_instructions ON view_instructions.signature_id = signature.id
 WHERE
-	signature.value = ANY($1::VARCHAR[])
+    signature.value = ANY($1::VARCHAR[])
 `
 
 type GetTransactionsFromSignaturesRow struct {
-	Ixs         interface{} `json:"ixs"`
-	Logs        []string    `json:"logs"`
-	Err         bool        `json:"err"`
-	Signature   string      `json:"signature"`
-	SignatureID int32       `json:"signature_id"`
+	Ixs         []byte   `json:"ixs"`
+	Logs        []string `json:"logs"`
+	Err         bool     `json:"err"`
+	Signature   string   `json:"signature"`
+	SignatureID int32    `json:"signature_id"`
 }
 
 func (q *Queries) GetTransactionsFromSignatures(ctx context.Context, dollar_1 []string) ([]*GetTransactionsFromSignaturesRow, error) {
@@ -273,6 +234,33 @@ func (q *Queries) GetTransactionsWithDuplicateTimestamps(ctx context.Context, st
 	return items, nil
 }
 
+const InsertAccount = `-- name: InsertAccount :one
+INSERT INTO account (selected_auth_provider, email) VALUES ($1, $2) RETURNING id
+`
+
+type InsertAccountParams struct {
+	AuthProvider AuthProviderType `json:"auth_provider"`
+	Email        string           `json:"email"`
+}
+
+func (q *Queries) InsertAccount(ctx context.Context, arg *InsertAccountParams) (int32, error) {
+	row := q.db.QueryRow(ctx, InsertAccount, arg.AuthProvider, arg.Email)
+	var id int32
+	err := row.Scan(&id)
+	return id, err
+}
+
+const InsertAddress = `-- name: InsertAddress :one
+INSERT INTO address (value) VALUES ($1) RETURNING id
+`
+
+func (q *Queries) InsertAddress(ctx context.Context, address string) (int32, error) {
+	row := q.db.QueryRow(ctx, InsertAddress, address)
+	var id int32
+	err := row.Scan(&id)
+	return id, err
+}
+
 const InsertAddresses = `-- name: InsertAddresses :many
 INSERT INTO address (value) (SELECT unnest FROM unnest($1::VARCHAR[])) ON CONFLICT (value) DO NOTHING RETURNING value, id
 `
@@ -334,7 +322,11 @@ type InsertInstructionsParams struct {
 }
 
 const InsertSignatures = `-- name: InsertSignatures :many
-INSERT INTO signature (value) (SELECT unnest FROM unnest($1::VARCHAR[])) RETURNING id, value
+INSERT INTO signature (value) (
+    SELECT unnest FROM unnest($1::VARCHAR[])
+) ON CONFLICT (
+    value
+) DO NOTHING RETURNING id, value
 `
 
 type InsertSignaturesRow struct {
@@ -362,6 +354,15 @@ func (q *Queries) InsertSignatures(ctx context.Context, dollar_1 []string) ([]*I
 	return items, nil
 }
 
+const InsertSyncWalletRequest = `-- name: InsertSyncWalletRequest :exec
+INSERT INTO sync_wallet_request (wallet_id) VALUES ($1)
+`
+
+func (q *Queries) InsertSyncWalletRequest(ctx context.Context, walletID int32) error {
+	_, err := q.db.Exec(ctx, InsertSyncWalletRequest, walletID)
+	return err
+}
+
 type InsertTransactionsParams struct {
 	SignatureID           int32              `json:"signature_id"`
 	AccountsIds           []int32            `json:"accounts_ids"`
@@ -371,6 +372,22 @@ type InsertTransactionsParams struct {
 	Logs                  []string           `json:"logs"`
 	Err                   bool               `json:"err"`
 	Fee                   int64              `json:"fee"`
+}
+
+const InsertWallet = `-- name: InsertWallet :one
+INSERT INTO wallet (account_id, address_id) VALUES ($1, $2) RETURNING id
+`
+
+type InsertWalletParams struct {
+	AccountID int32 `json:"account_id"`
+	AddressID int32 `json:"address_id"`
+}
+
+func (q *Queries) InsertWallet(ctx context.Context, arg *InsertWalletParams) (int32, error) {
+	row := q.db.QueryRow(ctx, InsertWallet, arg.AccountID, arg.AddressID)
+	var id int32
+	err := row.Scan(&id)
+	return id, err
 }
 
 const UpdateAssociatedAccountLastSignature = `-- name: UpdateAssociatedAccountLastSignature :exec
@@ -389,6 +406,20 @@ type UpdateAssociatedAccountLastSignatureParams struct {
 
 func (q *Queries) UpdateAssociatedAccountLastSignature(ctx context.Context, arg *UpdateAssociatedAccountLastSignatureParams) error {
 	_, err := q.db.Exec(ctx, UpdateAssociatedAccountLastSignature, arg.LastSignature, arg.AssociatedAccountAddress, arg.WalletID)
+	return err
+}
+
+const UpdateSyncWalletRequestStatus = `-- name: UpdateSyncWalletRequestStatus :exec
+UPDATE sync_wallet_request SET status = $1 WHERE wallet_id = $2
+`
+
+type UpdateSyncWalletRequestStatusParams struct {
+	Status   SyncWalletRequestStatus `json:"status"`
+	WalletID int32                   `json:"wallet_id"`
+}
+
+func (q *Queries) UpdateSyncWalletRequestStatus(ctx context.Context, arg *UpdateSyncWalletRequestStatusParams) error {
+	_, err := q.db.Exec(ctx, UpdateSyncWalletRequestStatus, arg.Status, arg.WalletID)
 	return err
 }
 

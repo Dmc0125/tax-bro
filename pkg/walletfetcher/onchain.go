@@ -3,6 +3,7 @@ package walletfetcher
 import (
 	"encoding/base64"
 	"encoding/hex"
+	"fmt"
 	"slices"
 	"strings"
 	"tax-bro/pkg/dbsqlc"
@@ -37,7 +38,10 @@ func findAccountIdFromAddress(addresses []*dbsqlc.Address, address string) int32
 	idx := slices.IndexFunc(addresses, func(a *dbsqlc.Address) bool {
 		return a.Value == address
 	})
-	utils.Assert(idx > -1, "unable to find account")
+	utils.Assert(
+		idx > -1,
+		fmt.Sprintf("unable to find account\naddresses: %#v\naddress: %s", addresses, address),
+	)
 	return addresses[idx].ID
 }
 
@@ -62,6 +66,14 @@ func (ix *onchainInstruction) GetInnerInstructions() (parsableInnerIxs []ixparse
 		parsableInnerIxs = append(parsableInnerIxs, innerIx)
 	}
 	return
+}
+
+func (ix *onchainInstruction) parse(walletAddress, signature string) map[string]*ixparser.AssociatedAccount {
+	isKnown, events, associatedAccounts := ixparser.ParseInstruction(ix, walletAddress, signature)
+	if isKnown {
+		ix.events = append(ix.events, events...)
+	}
+	return associatedAccounts
 }
 
 type OnchainTransaction struct {
@@ -127,11 +139,8 @@ func (tx *OnchainTransaction) intoParams(
 
 	params.AccountsIds = make([]int32, len(tx.Accounts))
 	for i, account := range tx.Accounts {
-		idx := slices.IndexFunc(insertedAddresses, func(a *dbsqlc.Address) bool {
-			return a.Value == account
-		})
-		utils.Assert(idx > -1, "unable to find account")
-		params.AccountsIds[i] = insertedAddresses[idx].ID
+		addressId := findAccountIdFromAddress(insertedAddresses, account)
+		params.AccountsIds[i] = addressId
 	}
 
 	params.Timestamp = pgtype.Timestamptz{Time: tx.Timestamp, Valid: true}

@@ -8,13 +8,13 @@ import (
 	"tax-bro/pkg/utils"
 	"time"
 
-	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 	"github.com/testcontainers/testcontainers-go/wait"
 )
 
-func InitDb() (*pgx.Conn, func()) {
+func InitDb() (*pgxpool.Pool, func()) {
 	projectDir := utils.GetProjectDir()
 	migrationsDir := path.Join(projectDir, "./db_migrations")
 	postgres, err := postgres.Run(
@@ -31,10 +31,10 @@ func InitDb() (*pgx.Conn, func()) {
 				WithOccurrence(2).WithStartupTimeout(10*time.Second)),
 	)
 	utils.AssertNoErr(err, "unable to start postgres container")
-	db, err := pgx.Connect(context.Background(), postgres.MustConnectionString(context.Background(), "sslmode=disable"))
+	db, err := pgxpool.New(context.Background(), postgres.MustConnectionString(context.Background(), "sslmode=disable"))
 	utils.AssertNoErr(err, "unable to connect to db")
 	cleanup := func() {
-		db.Close(context.Background())
+		db.Close()
 		if err := testcontainers.TerminateContainer(postgres); err != nil {
 			log.Printf("unable to gracefully terminate postgres container: %s", err)
 		}

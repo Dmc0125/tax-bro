@@ -128,6 +128,9 @@ CREATE TABLE "transaction" (
 CREATE TABLE instruction (
     signature_id INTEGER NOT NULL,
     "index" SMALLINT NOT NULL,
+    -- TODO:
+    -- only insert events to isntructions with isknown = false
+    is_known BOOLEAN NOT NULL DEFAULT false,
 
     FOREIGN KEY (signature_id) REFERENCES "signature"(id),
     PRIMARY KEY (signature_id, "index"),
@@ -184,6 +187,66 @@ CREATE TABLE instruction_event (
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE OR REPLACE FUNCTION get_ordered_accounts(accounts_ids INTEGER[])
+RETURNS jsonb AS $$
+    SELECT COALESCE(
+        jsonb_agg(
+            jsonb_build_object(
+                'id', address.id,
+                'value', address.value
+            )
+            ORDER BY array_position(accounts_ids, address.id)
+        ),
+        '[]'::jsonb
+    )
+    FROM
+        address
+    WHERE
+        address.id = ANY(accounts_ids);
+$$ LANGUAGE SQL STABLE;
+
+CREATE OR REPLACE VIEW view_inner_instructions AS
+SELECT
+    signature_id,
+    ix_index,
+    jsonb_agg(
+        jsonb_build_object(
+            'program_address', address.value,
+            'data', inner_instruction.data,
+            'accounts', get_ordered_accounts(inner_instruction.accounts_ids)
+        )
+        ORDER BY inner_instruction.index
+    ) as inner_instructions
+FROM
+    inner_instruction
+JOIN
+    address ON address.id = inner_instruction.program_account_id
+GROUP BY
+    signature_id, ix_index;
+
+CREATE OR REPLACE VIEW view_instructions AS
+SELECT
+    instruction.signature_id,
+    jsonb_agg(
+        jsonb_build_object(
+            'program_address', address.value,
+            'data', instruction.data,
+            'accounts', get_ordered_accounts(instruction.accounts_ids),
+            'inner_ixs', COALESCE(view_inner_instructions.inner_instructions, '[]'::jsonb)
+        )
+        ORDER BY instruction.index
+    ) as instructions
+FROM
+    instruction
+JOIN
+    address ON address.id = instruction.program_account_id
+LEFT JOIN
+    view_inner_instructions ON
+        view_inner_instructions.signature_id = instruction.signature_id
+        AND view_inner_instructions.ix_index = instruction.index
+GROUP BY
+    instruction.signature_id;
 INSERT INTO with_timestamps (table_name) VALUES
     ('wallet'),
     ('wallet_to_signature'),

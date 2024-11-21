@@ -12,22 +12,21 @@ import (
 var associatedTokenProgramAddress = solana.SPLAssociatedTokenAccountProgramID.String()
 
 func parseAssociatedTokenIx(
+	result *parseResult,
 	ix ParsableInstruction,
 	walletAddress, signature string,
-) ([]Event, map[string]*AssociatedAccount) {
+) {
 	data := ix.GetData()
 	isCreate := len(data) == 0 || data[0] == 0 || data[0] == 1
 
-	events := make([]Event, 0)
-	associatedAccounts := make(map[string]*AssociatedAccount)
-
 	if isCreate {
 		// CREATE || CREATE IDEMPOTENT
+		result.isKnown = true
 		innerIxs := ix.GetInnerInstructions()
 		innerIxsLen := len(innerIxs)
 
 		if innerIxsLen == 0 {
-			return events, associatedAccounts
+			return
 		}
 
 		accounts := ix.GetAccounts()
@@ -43,7 +42,7 @@ func parseAssociatedTokenIx(
 			data := createAccountIx.GetData()[4:]
 			lamports := binary.LittleEndian.Uint64(data)
 
-			events = append(events, &TransferEventData{
+			result.events = append(result.events, &TransferEventData{
 				From:    from,
 				To:      to,
 				IsRent:  true,
@@ -54,15 +53,13 @@ func parseAssociatedTokenIx(
 
 		owner := accounts[2]
 		if owner == walletAddress {
-			associatedAccounts[to] = &AssociatedAccount{
+			result.appendAssociatedAccount(&AssociatedAccount{
 				Type:    dbsqlc.AssociatedAccountTypeToken,
 				Address: to,
-			}
+			})
 		}
 	} else {
 		// RECOVER NESTED
 		slog.Error("unimplemented associated token instruction (recover nested)", "signature", signature)
 	}
-
-	return events, associatedAccounts
 }

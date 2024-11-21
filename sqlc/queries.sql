@@ -1,3 +1,18 @@
+-- name: InsertAccount :one
+INSERT INTO account (selected_auth_provider, email) VALUES (sqlc.arg(auth_provider), sqlc.arg(email)) RETURNING id;
+
+-- name: InsertAddress :one
+INSERT INTO address (value) VALUES (sqlc.arg(address)) RETURNING id;
+
+-- name: InsertWallet :one
+INSERT INTO wallet (account_id, address_id) VALUES (sqlc.arg(account_id), sqlc.arg(address_id)) RETURNING id;
+
+-- name: InsertSyncWalletRequest :exec
+INSERT INTO sync_wallet_request (wallet_id) VALUES (sqlc.arg(wallet_id));
+
+-- name: UpdateSyncWalletRequestStatus :exec
+UPDATE sync_wallet_request SET status = sqlc.arg(status) WHERE wallet_id = sqlc.arg(wallet_id);
+
 -- name: GetAssociatedAccountsForWallet :many
 SELECT
     address.value AS address, signature.value as last_signature
@@ -6,7 +21,7 @@ FROM
 INNER JOIN
     address ON address.id = associated_account.address_id
 LEFT JOIN
-    signature ON signature.id = associated_account.signature_id
+    signature ON signature.id = associated_account.last_signature_id
 WHERE
     associated_account.wallet_id = sqlc.arg(wallet_id);
 
@@ -32,73 +47,26 @@ LIMIT
 
 -- name: GetTransactionsFromSignatures :many
 SELECT
-    (
-        SELECT coalesce(json_agg(agg), '[]') FROM (
-    		SELECT
-    			address.value as program_address,
-    			instruction.data, (
-                    SELECT coalesce(json_agg(agg), '[]') FROM (
-                        SELECT
-                            address.id,
-                            address.value,
-                            array_position(instructions.accounts_ids, id) AS ord
-                        FROM
-                            address
-                        WHERE
-                            address.id = ANY(instruction.accounts_ids)
-                        ORDER BY
-                            ord ASC
-         			) AS agg
-          		) AS accounts,
-    			(
-    				SELECT coalesce(json_agg(agg), '[]') FROM (
-    					SELECT
-    						address.value AS program_address,
-    						inner_instruction.data, (
-                 			    SELECT coalesce(json_agg(agg), '[]') FROM (
-                                    SELECT
-                                        address.id,
-                                        address.value,
-                                        array_position(inner_instruction.accounts_ids, id) AS ord
-                                    FROM
-                                        address
-                                    WHERE
-                                        address.id = ANY(inner_instruction.accounts_ids)
-                                    ORDER BY
-                                        ord ASC
-                                ) AS agg
-                            ) AS accounts
-    					FROM
-    						inner_instruction
-    					INNER JOIN
-    						address ON address.id = inner_instruction.program_account_id
-    					WHERE
-    						inner_instruction.signature_id = instruction.signature_id
-    						AND inner_instruction.ix_index = instruction.index
-    					ORDER BY
-    						inner_instruction.index ASC
-    				) AS agg
-    			) AS inner_ixs
-    		FROM
-    			instruction
-    		INNER JOIN
-    			address ON address.id = instruction.program_account_id
-    		WHERE
-    			instruction.signature_id = signature.id
-    		ORDER BY
-    			instruction.index ASC
-    	) AS agg
-    ) AS ixs,
+    COALESCE(view_instructions.instructions, '[]'::jsonb) as ixs,
     transaction.logs,
     transaction.err,
     signature.value as signature,
     signature.id as signature_id
 FROM
-	signature
-INNER JOIN
-	transaction ON transaction.signature_id = signature.id
+    signature
+JOIN
+    transaction ON transaction.signature_id = signature.id
+LEFT JOIN
+    view_instructions ON view_instructions.signature_id = signature.id
 WHERE
-	signature.value = ANY($1::VARCHAR[]);
+    signature.value = ANY($1::VARCHAR[]);
+
+-- -- name: GetUnknownProgramAddresses :many
+SELECT DISTINCT address.value as program_address
+FROM instruction
+JOIN address ON address.id = instruction.program_account_id
+WHERE instruction.is_known = false;
+
 
 -- name: GetAddressesFromAddresses :many
 SELECT value, id FROM address WHERE value = ANY($1::VARCHAR[]);
@@ -107,7 +75,11 @@ SELECT value, id FROM address WHERE value = ANY($1::VARCHAR[]);
 INSERT INTO address (value) (SELECT * FROM unnest($1::VARCHAR[])) ON CONFLICT (value) DO NOTHING RETURNING value, id;
 
 -- name: InsertSignatures :many
-INSERT INTO signature (value) (SELECT * FROM unnest($1::VARCHAR[])) RETURNING id, value;
+INSERT INTO signature (value) (
+    SELECT * FROM unnest($1::VARCHAR[])
+) ON CONFLICT (
+    value
+) DO NOTHING RETURNING id, value;
 
 -- name: InsertTransactions :copyfrom
 INSERT INTO "transaction" (
@@ -157,8 +129,11 @@ INSERT INTO instruction_event (
     sqlc.arg(data)
 );
 
--- name: AssignInstructionsToWallet :copyfrom
-INSERT INTO wallet_to_signature (wallet_id, signature_id) VALUES (sqlc.arg(wallet_id), sqlc.arg(signature_id));
+-- name: AssignInstructionsToWallet :execrows
+INSERT INTO wallet_to_signature (wallet_id, signature_id) VALUES (
+    unnest(sqlc.arg(wallet_id)::INTEGER[]),
+    unnest(sqlc.arg(signature_id)::INTEGER[])
+) ON CONFLICT (wallet_id, signature_id) DO NOTHING;
 
 -- name: InsertAssociatedAccounts :copyfrom
 INSERT INTO associated_account (

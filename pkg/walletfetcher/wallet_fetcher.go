@@ -2,7 +2,6 @@ package walletfetcher
 
 import (
 	"context"
-	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -10,6 +9,7 @@ import (
 	"log/slog"
 	"maps"
 	"slices"
+	"sync"
 	"tax-bro/pkg/dbsqlc"
 	"tax-bro/pkg/ixparser"
 	"tax-bro/pkg/utils"
@@ -17,35 +17,35 @@ import (
 	"github.com/gagliardetto/solana-go"
 	"github.com/gagliardetto/solana-go/rpc"
 	"github.com/jackc/pgx/v5"
-	"golang.org/x/sync/errgroup"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-type savedInstructionBase struct {
+type SavedInstructionBase struct {
 	ProgramAddress string `json:"program_address"`
 	Accounts       []*dbsqlc.Address
 	Data           string
 }
 
-func (ix *savedInstructionBase) GetProgramAddress() string {
+func (ix *SavedInstructionBase) GetProgramAddress() string {
 	return ix.ProgramAddress
 }
 
-func (ix *savedInstructionBase) GetAccounts() (accounts []string) {
+func (ix *SavedInstructionBase) GetAccounts() (accounts []string) {
 	for _, a := range ix.Accounts {
 		accounts = append(accounts, a.Value)
 	}
 	return
 }
 
-func (ix *savedInstructionBase) GetData() []byte {
+func (ix *SavedInstructionBase) GetData() []byte {
 	bytes, err := base64.RawStdEncoding.DecodeString(ix.Data)
 	utils.AssertNoErr(err)
 	return bytes
 }
 
 type savedInstruction struct {
-	*savedInstructionBase
-	InnerIxs []*savedInstructionBase `json:"inner_ixs"`
+	*SavedInstructionBase
+	InnerIxs []*SavedInstructionBase `json:"inner_ixs"`
 }
 
 func (ix *savedInstruction) GetInnerInstructions() (parsableInnerIxs []ixparser.ParsableInstructionBase) {
@@ -55,33 +55,37 @@ func (ix *savedInstruction) GetInnerInstructions() (parsableInnerIxs []ixparser.
 	return
 }
 
+// func (ix *savedInstruction) parseAssociatedAccounts(walletAddress, signature string) map[string]*ixparser.AssociatedAccount {
+// 	// TODO: if ix is not known, we can attempt to parse events
+// 	_, associatedAccounts := ixparser.ParseInstruction(ix, walletAddress, signature)
+// 	return associatedAccounts
+// }
+
 type savedTransaction struct {
 	*dbsqlc.GetTransactionsFromSignaturesRow
 	Ixs []*savedInstruction
 }
 
 type FetchTransactionsRequest struct {
-	associatedAccountAddress string
-	pubkey                   solana.PublicKey
-	config                   *rpc.GetConfirmedSignaturesForAddress2Opts
+	isAssociatedAccount bool
+	address             string
+	pubkey              solana.PublicKey
+	config              *rpc.GetSignaturesForAddressOpts
 }
 
 func NewFetchTransactionsRequest(
-	associatedAccountAddress, walletAddress, lastSignature string,
+	isAssociatedAccount bool, address, lastSignature string,
 ) *FetchTransactionsRequest {
-	utils.Assert(
-		associatedAccountAddress != "" || walletAddress != "",
-		"either wallet address or associated account address needs to be provided",
-	)
-	address := walletAddress
-	if associatedAccountAddress != "" {
-		address = associatedAccountAddress
-	}
+	req := new(FetchTransactionsRequest)
+	req.isAssociatedAccount = isAssociatedAccount
+	req.address = address
+
 	pk, err := solana.PublicKeyFromBase58(address)
 	utils.AssertNoErr(err, "invalid wallet or associated account address")
+	req.pubkey = pk
 
-	limit := uint64(1000)
-	config := &rpc.GetConfirmedSignaturesForAddress2Opts{
+	limit := int(1000)
+	config := &rpc.GetSignaturesForAddressOpts{
 		Limit:      &limit,
 		Commitment: rpc.CommitmentConfirmed,
 	}
@@ -90,35 +94,42 @@ func NewFetchTransactionsRequest(
 		utils.AssertNoErr(err, "invalid last signature")
 		config.Until = until
 	}
+	req.config = config
 
-	return &FetchTransactionsRequest{
-		config:                   config,
-		pubkey:                   pk,
-		associatedAccountAddress: associatedAccountAddress,
-	}
+	return req
 }
 
 type Message struct {
 	associatedAccountAddress string
 	lastSignature            string
 
+	associatedAccounts  map[string]*ixparser.AssociatedAccount
 	savedTransactions   []*savedTransaction
 	unsavedTransactions []*OnchainTransaction
 }
 
-func NewMessage(associatedAccountAddress string, isLastIter bool, lastSignature string) *Message {
+func NewMessage(
+	isAssociatedAccount bool,
+	associatedAccountAddress string,
+	isLastIter bool,
+	lastSignature string,
+) *Message {
 	msg := new(Message)
-	msg.associatedAccountAddress = associatedAccountAddress
+	if isAssociatedAccount {
+		msg.associatedAccountAddress = associatedAccountAddress
+	}
 	if isLastIter {
 		msg.lastSignature = lastSignature
 	}
+	msg.associatedAccounts = make(map[string]*ixparser.AssociatedAccount)
 	msg.unsavedTransactions = make([]*OnchainTransaction, 0)
+	msg.savedTransactions = make([]*savedTransaction, 0)
 	return msg
 }
 
 type WalletFetcher struct {
 	ctx       context.Context
-	db        *pgx.Conn
+	db        *pgxpool.Pool
 	q         *dbsqlc.Queries
 	rpcClient *rpc.Client
 
@@ -131,7 +142,7 @@ type WalletFetcher struct {
 
 func NewFetcher(
 	ctx context.Context,
-	db *pgx.Conn,
+	db *pgxpool.Pool,
 	q *dbsqlc.Queries,
 	rpcClient *rpc.Client,
 	WalletId int32,
@@ -151,7 +162,7 @@ func NewFetcher(
 
 func (fetcher *WalletFetcher) GetAssociatedAccounts() error {
 	associatedAccounts, err := fetcher.q.GetAssociatedAccountsForWallet(fetcher.ctx, fetcher.WalletId)
-	if errors.Is(err, sql.ErrNoRows) {
+	if errors.Is(err, pgx.ErrNoRows) {
 		return nil
 	}
 	if err != nil {
@@ -173,13 +184,13 @@ func (fetcher *WalletFetcher) querySavedTransactions(signatures []*rpc.Transacti
 	}
 	savedTransactionsRows, err := fetcher.q.GetTransactionsFromSignatures(fetcher.ctx, qSignatures)
 	if err != nil {
-		return nil, fmt.Errorf("unbale to query transactions from signatures: %w", err)
+		return nil, fmt.Errorf("unable to query transactions from signatures: %w", err)
 	}
 	savedTransactions := make([]*savedTransaction, len(savedTransactionsRows))
 	for i, tx := range savedTransactionsRows {
 		ixs := []*savedInstruction{}
-		if err = json.Unmarshal(tx.Ixs.([]byte), &ixs); err != nil {
-			slog.Error("unmarshal error", "ixs", string(tx.Ixs.([]byte)))
+		if err = json.Unmarshal(tx.Ixs, &ixs); err != nil {
+			slog.Error("unmarshal error", "ixs", string(tx.Ixs))
 			return nil, fmt.Errorf("unable to unmarshal instructions: %w", err)
 		}
 		savedTransactions[i] = &savedTransaction{
@@ -213,6 +224,7 @@ func (fetcher *WalletFetcher) fetchTransaction(signature solana.Signature) (*Onc
 func (fetcher *WalletFetcher) FetchTransactions(request *FetchTransactionsRequest, msgChan chan *Message) {
 	config := request.config
 	newLastSignature := ""
+	address := request.address
 
 	for {
 		select {
@@ -220,25 +232,44 @@ func (fetcher *WalletFetcher) FetchTransactions(request *FetchTransactionsReques
 			return
 		default:
 			signatures, err := utils.CallRpcWithRetries(func() ([]*rpc.TransactionSignature, error) {
-				return fetcher.rpcClient.GetConfirmedSignaturesForAddress2(fetcher.ctx, request.pubkey, config)
+				return fetcher.rpcClient.GetSignaturesForAddressWithOpts(fetcher.ctx, request.pubkey, config)
 			}, 5)
 			utils.AssertNoErr(err, "unable to fetch signatures")
+			slog.Info("fetched signatures", "signatures", len(signatures))
 
-			isLastIter := len(signatures) < int(*config.Limit)
-			msg := NewMessage(request.associatedAccountAddress, isLastIter, newLastSignature)
-
-			if len(signatures) == 0 {
+			if len(signatures) == 0 && newLastSignature != "" {
+				slog.Debug("sending last message")
+				msg := NewMessage(request.isAssociatedAccount, address, true, newLastSignature)
 				msgChan <- msg
+				return
+			} else if len(signatures) == 0 {
+				slog.Debug("last msg is empty")
 				return
 			}
 			if newLastSignature == "" {
 				newLastSignature = signatures[0].Signature.String()
 			}
 
+			isLastIter := len(signatures) < int(*config.Limit)
+			msg := NewMessage(request.isAssociatedAccount, address, isLastIter, newLastSignature)
+
 			msg.savedTransactions, err = fetcher.querySavedTransactions(signatures)
 			utils.AssertNoErr(err)
 
-			for _, signature := range signatures {
+			if !request.isAssociatedAccount {
+				for _, tx := range msg.savedTransactions {
+					if tx.Err {
+						continue
+					}
+					for _, ix := range tx.Ixs {
+						_, _, associatedAccounts := ixparser.ParseInstruction(ix, address, tx.Signature)
+						maps.Insert(msg.associatedAccounts, maps.All(associatedAccounts))
+					}
+				}
+				slog.Info("fetched and parsed saved transactions", "saved transactions", len(msg.savedTransactions))
+			}
+
+			for i, signature := range signatures {
 				if fetcher.ctx.Err() != nil {
 					return
 				}
@@ -246,16 +277,30 @@ func (fetcher *WalletFetcher) FetchTransactions(request *FetchTransactionsReques
 				txIdx := slices.IndexFunc(msg.savedTransactions, func(tx *savedTransaction) bool {
 					return tx.Signature == s.String()
 				})
-				if txIdx == -1 {
+				if txIdx > -1 {
 					continue
 				}
+				slog.Debug("fetching onchain transaction", "idx", i+1)
 				tx, err := fetcher.fetchTransaction(s)
 				utils.AssertNoErr(err, "unable to fetch transaction")
+
+				if !tx.Err {
+					for _, ix := range tx.Ixs {
+						associatedAccounts := ix.parse(address, tx.Signature)
+						if !request.isAssociatedAccount {
+							maps.Insert(msg.associatedAccounts, maps.All(associatedAccounts))
+						}
+					}
+				}
+
 				msg.unsavedTransactions = append(msg.unsavedTransactions, tx)
 			}
+			slog.Info("fetched and parsed onchain transactions", "onchain transactions", len(msg.unsavedTransactions))
 
+			maps.Insert(fetcher.AssociatedAccounts, maps.All(msg.associatedAccounts))
 			msgChan <- msg
 			if isLastIter {
+				slog.Info("sending last message")
 				return
 			}
 		}
@@ -263,6 +308,10 @@ func (fetcher *WalletFetcher) FetchTransactions(request *FetchTransactionsReques
 }
 
 func (fetcher *WalletFetcher) insertAddresses(addresses []string) ([]*dbsqlc.Address, error) {
+	if len(addresses) == 0 {
+		return make([]*dbsqlc.Address, 0), nil
+	}
+
 	tx, err := fetcher.db.Begin(fetcher.ctx)
 	if err != nil {
 		return nil, err
@@ -275,14 +324,14 @@ func (fetcher *WalletFetcher) insertAddresses(addresses []string) ([]*dbsqlc.Add
 		return nil, err
 	}
 
-	out := make([]*dbsqlc.Address, len(addresses), len(addresses))
+	out := make([]*dbsqlc.Address, len(savedAddresses))
 	for i, a := range savedAddresses {
 		out[i] = &dbsqlc.Address{
 			Value: a.Value,
 			ID:    a.ID,
 		}
 	}
-	if len(savedAddresses) == len(addresses) {
+	if len(out) == len(addresses) {
 		return out, nil
 	}
 
@@ -300,12 +349,11 @@ func (fetcher *WalletFetcher) insertAddresses(addresses []string) ([]*dbsqlc.Add
 	if err != nil {
 		return nil, err
 	}
-	offset := len(savedAddresses)
-	for i, a := range insertedAddresses {
-		out[i+offset] = &dbsqlc.Address{
+	for _, a := range insertedAddresses {
+		out = append(out, &dbsqlc.Address{
 			Value: a.Value,
 			ID:    a.ID,
-		}
+		})
 	}
 
 	err = tx.Commit(fetcher.ctx)
@@ -331,21 +379,32 @@ func (fetcher *WalletFetcher) insertTransactionsData(
 
 	qtx := fetcher.q.WithTx(tx)
 	insertedSignatures, err := qtx.InsertSignatures(fetcher.ctx, signatures)
+	// if data is not yet inserted for main wallet,
+	// associated accounts may have only the same txs
+	// in that case we would get no rows because conflict
+	if errors.Is(err, pgx.ErrNoRows) {
+		return make([]*dbsqlc.InsertSignaturesRow, 0), nil
+	}
 	if err != nil {
 		return nil, err
 	}
 
-	insertTransactionsParams := make([]*dbsqlc.InsertTransactionsParams, len(transactions))
+	insertTransactionsParams := make([]*dbsqlc.InsertTransactionsParams, 0)
 	insertInstructionsParams := make([]*dbsqlc.InsertInstructionsParams, 0)
 	insertInnerInstructionsParams := make([]*dbsqlc.InsertInnerInstructionsParams, 0)
 	insertInstructionEventsParams := make([]*dbsqlc.InsertInstructionEventsParams, 0)
 
-	for i, tx := range transactions {
+	for _, tx := range transactions {
 		sigIdx := slices.IndexFunc(insertedSignatures, func(s *dbsqlc.InsertSignaturesRow) bool {
 			return s.Value == tx.Signature
 		})
+		// signature can be missing because of pk conflict
+		// line 380
+		if sigIdx == -1 {
+			continue
+		}
 		signatureId := insertedSignatures[sigIdx].ID
-		insertTransactionsParams[i] = tx.intoParams(signatureId, addresses)
+		insertTransactionsParams = append(insertTransactionsParams, tx.intoParams(signatureId, addresses))
 
 		for ixIndex, ix := range tx.Ixs {
 			programAddressId, accountsIds, data := ix.intoParams(addresses)
@@ -390,30 +449,21 @@ func (fetcher *WalletFetcher) insertTransactionsData(
 		}
 	}
 
-	var eg errgroup.Group
-	eg.TryGo(func() error {
-		_, err = qtx.InsertTransactions(fetcher.ctx, insertTransactionsParams)
-		return err
-	})
-	if len(insertInstructionsParams) > 0 {
-		eg.TryGo(func() error {
-			_, err := qtx.InsertInstructions(fetcher.ctx, insertInstructionsParams)
-
-			if len(insertInnerInstructionsParams) > 0 {
-				eg.TryGo(func() error {
-					_, err := qtx.InsertInnerInstructions(fetcher.ctx, insertInnerInstructionsParams)
-					return err
-				})
-			}
-			if len(insertInstructionEventsParams) > 0 {
-				eg.TryGo(func() error {
-					_, err := qtx.InsertInstructionEvents(fetcher.ctx, insertInstructionEventsParams)
-					return err
-				})
-			}
-
-			return err
-		})
+	_, err = qtx.InsertTransactions(fetcher.ctx, insertTransactionsParams)
+	if err != nil {
+		return nil, fmt.Errorf("unable to insert transactions: %w", err)
+	}
+	_, err = qtx.InsertInstructions(fetcher.ctx, insertInstructionsParams)
+	if err != nil {
+		return nil, fmt.Errorf("unable to insert instructions: %w", err)
+	}
+	_, err = qtx.InsertInnerInstructions(fetcher.ctx, insertInnerInstructionsParams)
+	if err != nil {
+		return nil, fmt.Errorf("unable to insert innner instructions: %w", err)
+	}
+	_, err = qtx.InsertInstructionEvents(fetcher.ctx, insertInstructionEventsParams)
+	if err != nil {
+		return nil, fmt.Errorf("unable to insert instructions events: %w", err)
 	}
 
 	err = tx.Commit(fetcher.ctx)
@@ -448,21 +498,16 @@ func (fetcher *WalletFetcher) insertWalletData(
 
 	qtx := fetcher.q.WithTx(tx)
 	if signaturesCount > 0 {
-		assignSignaturesToWalletParams := make([]*dbsqlc.AssignInstructionsToWalletParams, signaturesCount, signaturesCount)
-		for i, tx := range savedTransactions {
-			assignSignaturesToWalletParams[i] = &dbsqlc.AssignInstructionsToWalletParams{
-				WalletID:    fetcher.WalletId,
-				SignatureID: tx.SignatureID,
-			}
+		params := &dbsqlc.AssignInstructionsToWalletParams{}
+		for _, tx := range savedTransactions {
+			params.WalletID = append(params.WalletID, fetcher.WalletId)
+			params.SignatureID = append(params.SignatureID, tx.SignatureID)
 		}
-		offset := len(savedTransactions)
-		for i, signature := range insertedSignatures {
-			assignSignaturesToWalletParams[i+offset] = &dbsqlc.AssignInstructionsToWalletParams{
-				WalletID:    fetcher.WalletId,
-				SignatureID: signature.ID,
-			}
+		for _, signature := range insertedSignatures {
+			params.WalletID = append(params.WalletID, fetcher.WalletId)
+			params.SignatureID = append(params.SignatureID, signature.ID)
 		}
-		_, err = qtx.AssignInstructionsToWallet(fetcher.ctx, assignSignaturesToWalletParams)
+		_, err = qtx.AssignInstructionsToWallet(fetcher.ctx, params)
 		if err != nil {
 			return err
 		}
@@ -489,10 +534,16 @@ func (fetcher *WalletFetcher) insertWalletData(
 	}
 
 	if associatedAccountAddress != "" && lastSignature != "" {
-		err = qtx.UpdateAssociatedAccountLastSignature(fetcher.ctx, &dbsqlc.UpdateAssociatedAccountLastSignatureParams{
+		if err = qtx.UpdateAssociatedAccountLastSignature(fetcher.ctx, &dbsqlc.UpdateAssociatedAccountLastSignatureParams{
 			LastSignature:            lastSignature,
 			AssociatedAccountAddress: associatedAccountAddress,
 			WalletID:                 fetcher.WalletId,
+		}); err != nil {
+			return err
+		}
+		err = qtx.UpdateWalletAggregateCounts(fetcher.ctx, &dbsqlc.UpdateWalletAggregateCountsParams{
+			SignaturesCount: int32(signaturesCount),
+			WalletID:        fetcher.WalletId,
 		})
 	} else if lastSignature != "" {
 		err = qtx.UpdateWalletAggregateCountsAndLastSignature(fetcher.ctx, &dbsqlc.UpdateWalletAggregateCountsAndLastSignatureParams{
@@ -515,78 +566,39 @@ func (fetcher *WalletFetcher) insertWalletData(
 	return tx.Commit(fetcher.ctx)
 }
 
-func (fetcher *WalletFetcher) HandleMessages(msgChan chan *Message) {
+func (fetcher *WalletFetcher) HandleMessages(wg *sync.WaitGroup, msgChan chan *Message) {
+	defer wg.Done()
 	for {
 		select {
 		case <-fetcher.ctx.Done():
 			return
 		case msg, ok := <-msgChan:
 			if !ok {
+				slog.Debug("msg channel closed")
 				return
 			}
 			utils.Assert(
-				len(msg.savedTransactions) > 0 || len(msg.unsavedTransactions) > 0 || msg.lastSignature != "",
-				"invalid message data",
+				!(msg.associatedAccountAddress != "" && len(msg.associatedAccounts) > 0),
+				"associated account must not have associated accounts",
 			)
-			// msg can be sent with
-			//
-			// txs associated to wallet imported by user
-			// txs associated to associated account related to wallet
-			//
-			// saved txs already have events parsed, so for those we only want to
-			// parse associated accounts (so if it's sent by associated account we ignore saved txs)
-			//
-			// for unsaved txs associated to wallet we need to parse both events and associated accounts
-			// otherwise only parse events
+			utils.Assert(
+				len(msg.savedTransactions) > 0 || len(msg.associatedAccounts) > 0 || len(msg.unsavedTransactions) > 0 || msg.lastSignature != "",
+				"msg must not be empty",
+			)
+			slog.Debug("received valid msg", "message", msg, "last sinature", msg.lastSignature)
 
-			associatedAccountsBatch := make(map[string]*ixparser.AssociatedAccount)
-			if msg.associatedAccountAddress == "" {
-				for _, tx := range msg.savedTransactions {
-					if tx.Err {
-						continue
-					}
-					for _, ix := range tx.Ixs {
-						_, associatedAccounts := ixparser.ParseInstruction(ix, fetcher.WalletAddress, tx.Signature)
-						if associatedAccounts == nil {
-							continue
-						}
-						maps.Insert(associatedAccountsBatch, maps.All(associatedAccounts))
-						maps.Insert(fetcher.AssociatedAccounts, maps.All(associatedAccounts))
-					}
-				}
-			}
-			addressesBatch := make(map[string]bool)
+			uniqueAddresses := make(map[string]bool)
 			for _, tx := range msg.unsavedTransactions {
-				if tx.Err {
-					continue
-				}
-				for _, address := range tx.Accounts {
-					addressesBatch[address] = true
-				}
-				for _, ix := range tx.Ixs {
-					events, associatedAccounts := ixparser.ParseInstruction(
-						ix,
-						// don't care if it's asscoiated account because
-						// those can not have associated accounts
-						fetcher.WalletAddress,
-						tx.Signature,
-					)
-					if events != nil {
-						ix.events = append(ix.events, events...)
-					}
-					if msg.associatedAccountAddress == "" && associatedAccounts != nil {
-						maps.Insert(associatedAccountsBatch, maps.All(associatedAccounts))
-						maps.Insert(fetcher.AssociatedAccounts, maps.All(associatedAccounts))
-					}
+				for _, account := range tx.Accounts {
+					uniqueAddresses[account] = true
 				}
 			}
+			for address := range msg.associatedAccounts {
+				uniqueAddresses[address] = true
+			}
 
-			// Need to handle it with txs because
-			// If it fails for whatever reason, we want to
-			// 		- keep currently inserted accounts (actually does not matter but why not keep it)
-			// 		- signatures are expected to have tx, ixs, innerixs and events
-			// 		- wallet state is independent of all of these so does not matter if we don't get to it (will just be handled next time)
-			insertedAddresses, err := fetcher.insertAddresses(slices.Collect(maps.Keys(addressesBatch)))
+			slog.Debug("inserting addresses")
+			insertedAddresses, err := fetcher.insertAddresses(slices.Collect(maps.Keys(uniqueAddresses)))
 			utils.AssertNoErr(err)
 			if fetcher.ctx.Err() != nil {
 				return
@@ -594,6 +606,7 @@ func (fetcher *WalletFetcher) HandleMessages(msgChan chan *Message) {
 
 			insertedSignatures := make([]*dbsqlc.InsertSignaturesRow, 0)
 			if len(msg.unsavedTransactions) > 0 {
+				slog.Debug("inserting transactions data")
 				insertedSignatures, err = fetcher.insertTransactionsData(insertedAddresses, msg.unsavedTransactions)
 				utils.AssertNoErr(err)
 				if fetcher.ctx.Err() != nil {
@@ -603,7 +616,7 @@ func (fetcher *WalletFetcher) HandleMessages(msgChan chan *Message) {
 
 			err = fetcher.insertWalletData(
 				msg.associatedAccountAddress,
-				associatedAccountsBatch,
+				msg.associatedAccounts,
 				insertedAddresses,
 				insertedSignatures,
 				msg.savedTransactions,

@@ -9,39 +9,6 @@ import (
 	"context"
 )
 
-// iteratorForAssignInstructionsToWallet implements pgx.CopyFromSource.
-type iteratorForAssignInstructionsToWallet struct {
-	rows                 []*AssignInstructionsToWalletParams
-	skippedFirstNextCall bool
-}
-
-func (r *iteratorForAssignInstructionsToWallet) Next() bool {
-	if len(r.rows) == 0 {
-		return false
-	}
-	if !r.skippedFirstNextCall {
-		r.skippedFirstNextCall = true
-		return true
-	}
-	r.rows = r.rows[1:]
-	return len(r.rows) > 0
-}
-
-func (r iteratorForAssignInstructionsToWallet) Values() ([]interface{}, error) {
-	return []interface{}{
-		r.rows[0].WalletID,
-		r.rows[0].SignatureID,
-	}, nil
-}
-
-func (r iteratorForAssignInstructionsToWallet) Err() error {
-	return nil
-}
-
-func (q *Queries) AssignInstructionsToWallet(ctx context.Context, arg []*AssignInstructionsToWalletParams) (int64, error) {
-	return q.db.CopyFrom(ctx, []string{"wallet_to_signature"}, []string{"wallet_id", "signature_id"}, &iteratorForAssignInstructionsToWallet{rows: arg})
-}
-
 // iteratorForInsertAssociatedAccounts implements pgx.CopyFromSource.
 type iteratorForInsertAssociatedAccounts struct {
 	rows                 []*InsertAssociatedAccountsParams

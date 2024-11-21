@@ -24,6 +24,27 @@ type Event interface {
 	Compile([]*dbsqlc.Address) (CompiledEvent, error)
 }
 
+type parseResult struct {
+	isKnown            bool
+	events             []Event
+	associatedAccounts map[string]*AssociatedAccount
+}
+
+func newParseResult() *parseResult {
+	return &parseResult{
+		events:             make([]Event, 0),
+		associatedAccounts: make(map[string]*AssociatedAccount),
+	}
+}
+
+func (result *parseResult) appendAssociatedAccount(account *AssociatedAccount) {
+	result.associatedAccounts[account.Address] = account
+}
+
+func (result *parseResult) intoTuple() (bool, []Event, map[string]*AssociatedAccount) {
+	return result.isKnown, result.events, result.associatedAccounts
+}
+
 type ParsableInstructionBase interface {
 	GetProgramAddress() string
 	GetAccounts() []string
@@ -38,20 +59,17 @@ type ParsableInstruction interface {
 func ParseInstruction(
 	ix ParsableInstruction,
 	walletAddress, signature string,
-) ([]Event, map[string]*AssociatedAccount) {
+) (bool, []Event, map[string]*AssociatedAccount) {
+	result := newParseResult()
+
 	switch ix.GetProgramAddress() {
 	case systemProgramAddress:
-		event := parseSystemIx(ix)
-		events := make([]Event, 0)
-		if event != nil {
-			events = append(events, event)
-		}
-		return events, make(map[string]*AssociatedAccount)
+		parseSystemIx(result, ix)
 	case tokenProgramAddress:
-		return parseTokenIx(ix, walletAddress)
+		parseTokenIx(result, ix, walletAddress)
 	case associatedTokenProgramAddress:
-		return parseAssociatedTokenIx(ix, walletAddress, signature)
+		parseAssociatedTokenIx(result, ix, walletAddress, signature)
 	}
 
-	return make([]Event, 0), make(map[string]*AssociatedAccount)
+	return result.intoTuple()
 }

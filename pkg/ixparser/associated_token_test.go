@@ -54,7 +54,7 @@ func TestATACreate(t *testing.T) {
 	require.False(t, tx.Err)
 
 	executedIx := tx.Ixs[2]
-	events, associatedAccounts := ixparser.ParseInstruction(executedIx, wallet.PublicKey().String(), txResult.Signature)
+	_, events, associatedAccounts := ixparser.ParseInstruction(executedIx, wallet.PublicKey().String(), txResult.Signature)
 
 	require.Len(t, associatedAccounts, 1)
 
@@ -106,7 +106,7 @@ func TestATACreateWithNoData(t *testing.T) {
 	require.False(t, tx.Err)
 
 	executedIx := tx.Ixs[2]
-	events, associatedAccounts := ixparser.ParseInstruction(executedIx, wallet.PublicKey().String(), txResult.Signature)
+	_, events, associatedAccounts := ixparser.ParseInstruction(executedIx, wallet.PublicKey().String(), txResult.Signature)
 
 	require.Len(t, associatedAccounts, 1)
 
@@ -158,7 +158,7 @@ func TestATACreateIdempotentWithoutBalance(t *testing.T) {
 	require.False(t, tx.Err)
 
 	executedIx := tx.Ixs[2]
-	events, associatedAccounts := ixparser.ParseInstruction(executedIx, wallet.PublicKey().String(), txResult.Signature)
+	_, events, associatedAccounts := ixparser.ParseInstruction(executedIx, wallet.PublicKey().String(), txResult.Signature)
 
 	require.Len(t, associatedAccounts, 1)
 
@@ -214,7 +214,7 @@ func TestATACreateIdempotentWithNotEnoughBalance(t *testing.T) {
 	require.False(t, tx.Err)
 
 	executedIx := tx.Ixs[3]
-	events, associatedAccounts := ixparser.ParseInstruction(executedIx, wallet.PublicKey().String(), txResult.Signature)
+	_, events, associatedAccounts := ixparser.ParseInstruction(executedIx, wallet.PublicKey().String(), txResult.Signature)
 
 	require.Len(t, associatedAccounts, 1)
 
@@ -270,7 +270,7 @@ func TestATACreateIdempotentWithEnoughBalance(t *testing.T) {
 	require.False(t, tx.Err)
 
 	executedIx := tx.Ixs[3]
-	events, associatedAccounts := ixparser.ParseInstruction(executedIx, wallet.PublicKey().String(), txResult.Signature)
+	_, events, associatedAccounts := ixparser.ParseInstruction(executedIx, wallet.PublicKey().String(), txResult.Signature)
 
 	require.Len(t, associatedAccounts, 1)
 	require.Empty(t, events)

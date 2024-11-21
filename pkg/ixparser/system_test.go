@@ -39,7 +39,7 @@ func TestSystemCreateAccount(t *testing.T) {
 	utils.Assert(tx != nil, "unable to execute tx")
 	require.False(t, tx.Err)
 
-	events, associatedAccounts := ixparser.ParseInstruction(tx.Ixs[0], wallet.PublicKey().String(), txResult.Signature)
+	_, events, associatedAccounts := ixparser.ParseInstruction(tx.Ixs[0], wallet.PublicKey().String(), txResult.Signature)
 
 	require.Len(t, associatedAccounts, 0)
 	event := events[0]
@@ -85,7 +85,7 @@ func TestSystemCreateAccountWithSeed(t *testing.T) {
 	utils.Assert(tx != nil, "unable to execute tx")
 	require.False(t, tx.Err)
 
-	events, associatedAccounts := ixparser.ParseInstruction(tx.Ixs[0], wallet.PublicKey().String(), txResult.Signature)
+	_, events, associatedAccounts := ixparser.ParseInstruction(tx.Ixs[0], wallet.PublicKey().String(), txResult.Signature)
 
 	require.Empty(t, associatedAccounts)
 	event := events[0]
@@ -119,7 +119,7 @@ func TestSystemTransfer(t *testing.T) {
 	utils.Assert(tx != nil, "unable to execute tx")
 	require.False(t, tx.Err)
 
-	events, associatedAccounts := ixparser.ParseInstruction(tx.Ixs[0], wallet.PublicKey().String(), txResult.Signature)
+	_, events, associatedAccounts := ixparser.ParseInstruction(tx.Ixs[0], wallet.PublicKey().String(), txResult.Signature)
 
 	require.Empty(t, associatedAccounts)
 	event := events[0]
@@ -176,7 +176,7 @@ func TestSystemTransferWithSeed(t *testing.T) {
 	utils.Assert(tx != nil, "unable to execute tx")
 	require.False(t, tx.Err)
 
-	events, associatedAccounts := ixparser.ParseInstruction(tx.Ixs[1], wallet.PublicKey().String(), txResult.Signature)
+	_, events, associatedAccounts := ixparser.ParseInstruction(tx.Ixs[1], wallet.PublicKey().String(), txResult.Signature)
 
 	require.Empty(t, associatedAccounts)
 	event := events[0]
@@ -211,7 +211,7 @@ func TestSystemWithdrawNonceAccount(t *testing.T) {
 	utils.Assert(tx != nil, "unable to execute tx")
 	require.False(t, tx.Err)
 
-	events, associatedAccounts := ixparser.ParseInstruction(tx.Ixs[1], wallet.PublicKey().String(), txResult.Signature)
+	_, events, associatedAccounts := ixparser.ParseInstruction(tx.Ixs[1], wallet.PublicKey().String(), txResult.Signature)
 
 	require.Empty(t, associatedAccounts)
 	event := events[0]

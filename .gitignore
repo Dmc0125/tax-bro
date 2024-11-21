@@ -5,3 +5,4 @@
 tmp
 fuzz_tests
 test-ledger
+*.log

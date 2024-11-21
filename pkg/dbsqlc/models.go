@@ -230,6 +230,7 @@ type InnerInstruction struct {
 type Instruction struct {
 	SignatureID      int32              `json:"signature_id"`
 	Index            int16              `json:"index"`
+	IsKnown          bool               `json:"is_known"`
 	ProgramAccountID int32              `json:"program_account_id"`
 	AccountsIds      []int32            `json:"accounts_ids"`
 	Data             string             `json:"data"`
@@ -280,6 +281,17 @@ type Transaction struct {
 	Fee                   int64              `json:"fee"`
 	CreatedAt             pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt             pgtype.Timestamptz `json:"updated_at"`
+}
+
+type ViewInnerInstruction struct {
+	SignatureID       int32  `json:"signature_id"`
+	IxIndex           int16  `json:"ix_index"`
+	InnerInstructions []byte `json:"inner_instructions"`
+}
+
+type ViewInstruction struct {
+	SignatureID  int32  `json:"signature_id"`
+	Instructions []byte `json:"instructions"`
 }
 
 type Wallet struct {

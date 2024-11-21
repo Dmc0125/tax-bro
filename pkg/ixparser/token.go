@@ -12,18 +12,17 @@ import (
 var tokenProgramAddress = token.ProgramID.String()
 
 func parseTokenIx(
+	result *parseResult,
 	ix ParsableInstruction,
 	walletAddress string,
-) ([]Event, map[string]*AssociatedAccount) {
-
+) {
 	dataWithDiscriminator := ix.GetData()
 	utils.Assert(len(dataWithDiscriminator) >= 1, ErrMissingDiscriminator)
 
 	disc := uint8(dataWithDiscriminator[0])
 	data := dataWithDiscriminator[1:]
 
-	events := make([]Event, 0)
-	associatedAccounts := make(map[string]*AssociatedAccount)
+	result.isKnown = true
 
 	switch disc {
 	case token.Instruction_InitializeAccount:
@@ -32,11 +31,10 @@ func parseTokenIx(
 
 		owner := accounts[2]
 		if owner == walletAddress {
-			address := accounts[0]
-			associatedAccounts[address] = &AssociatedAccount{
+			result.appendAssociatedAccount(&AssociatedAccount{
 				Type:    dbsqlc.AssociatedAccountTypeToken,
-				Address: address,
-			}
+				Address: accounts[0],
+			})
 		}
 	case token.Instruction_InitializeAccount3:
 		fallthrough
@@ -48,11 +46,10 @@ func parseTokenIx(
 		ownerBytes := data[:32]
 		owner := solana.PublicKeyFromBytes(ownerBytes).String()
 		if owner == walletAddress {
-			address := accounts[0]
-			associatedAccounts[address] = &AssociatedAccount{
+			result.appendAssociatedAccount(&AssociatedAccount{
 				Type:    dbsqlc.AssociatedAccountTypeToken,
-				Address: address,
-			}
+				Address: accounts[0],
+			})
 		}
 	case token.Instruction_MintToChecked:
 		fallthrough
@@ -63,7 +60,7 @@ func parseTokenIx(
 		utils.Assert(len(data) >= 8, ErrInvalidData)
 		amount := binary.LittleEndian.Uint64(data)
 
-		events = append(events, &MintEventData{
+		result.events = append(result.events, &MintEventData{
 			To:     accounts[1],
 			Amount: amount,
 			Token:  accounts[0],
@@ -77,7 +74,7 @@ func parseTokenIx(
 		utils.Assert(len(data) >= 8, ErrInvalidData)
 		amount := binary.LittleEndian.Uint64(data)
 
-		events = append(events, &BurnEventData{
+		result.events = append(result.events, &BurnEventData{
 			From:   accounts[0],
 			Amount: amount,
 			Token:  accounts[1],
@@ -86,7 +83,7 @@ func parseTokenIx(
 		accounts := ix.GetAccounts()
 		utils.Assert(len(accounts) >= 2, ErrNotEnoughAccounts)
 
-		events = append(events, &CloseAccountEventData{
+		result.events = append(result.events, &CloseAccountEventData{
 			Account: accounts[0],
 			To:      accounts[1],
 		})
@@ -97,7 +94,7 @@ func parseTokenIx(
 		utils.Assert(len(data) >= 8, ErrInvalidData)
 		amount := binary.LittleEndian.Uint64(data)
 
-		events = append(events, &TransferEventData{
+		result.events = append(result.events, &TransferEventData{
 			From:    accounts[0],
 			To:      accounts[1],
 			Amount:  amount,
@@ -111,7 +108,7 @@ func parseTokenIx(
 		utils.Assert(len(data) >= 8, ErrInvalidData)
 		amount := binary.LittleEndian.Uint64(data)
 
-		events = append(events, &TransferEventData{
+		result.events = append(result.events, &TransferEventData{
 			From:    accounts[0],
 			To:      accounts[2],
 			Amount:  amount,
@@ -119,6 +116,4 @@ func parseTokenIx(
 			IsRent:  false,
 		})
 	}
-
-	return events, associatedAccounts
 }
